@@ -1,0 +1,17 @@
+{
+  "name": "swipe-monorepo",
+  "private": true,
+  "packageManager": "pnpm@9.15.0",
+  "scripts": {
+    "dev": "pnpm --parallel --filter './apps/*' dev",
+    "dev:server": "pnpm --filter @swipe/server dev",
+    "dev:client": "pnpm --filter @swipe/client dev",
+    "build": "pnpm --filter @swipe/shared build && pnpm --parallel --filter './apps/*' build",
+    "build:shared": "pnpm --filter @swipe/shared build",
+    "typecheck": "pnpm -r typecheck",
+    "clean": "pnpm -r clean"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0"
+  }
+}
