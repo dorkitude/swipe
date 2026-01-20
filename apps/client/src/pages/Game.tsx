@@ -88,22 +88,49 @@ export function Game() {
         setRoom(gameRoom);
         setPhase('waiting');
 
-        // Listen to state changes
-        gameRoom.state.listen('phase', (newPhase: string) => {
-          console.log('Phase changed:', newPhase);
-          setPhase(newPhase);
-        });
+        // Listen to state changes via onStateChange
+        let lastPhase = '';
+        let timerInterval: ReturnType<typeof setInterval> | null = null;
 
-        gameRoom.state.listen('roundEndTime', (endTime: number) => {
-          if (endTime > 0) {
+        gameRoom.onStateChange((state) => {
+          // Update phase
+          if (state.phase !== lastPhase) {
+            lastPhase = state.phase;
+            console.log('Phase changed:', state.phase);
+            setPhase(state.phase);
+          }
+
+          // Update timer
+          if (state.roundEndTime > 0) {
+            if (timerInterval) clearInterval(timerInterval);
             const updateTimer = () => {
-              const remaining = Math.max(0, Math.ceil((endTime - Date.now()) / 1000));
+              const remaining = Math.max(0, Math.ceil((state.roundEndTime - Date.now()) / 1000));
               setTimeLeft(remaining);
             };
             updateTimer();
-            const interval = setInterval(updateTimer, 100);
-            setTimeout(() => clearInterval(interval), endTime - Date.now() + 1000);
+            timerInterval = setInterval(updateTimer, 100);
           }
+
+          // Update all player scores
+          setPlayers((prev) => {
+            const newMap = new Map(prev);
+            state.players.forEach((player: any, sessionId: string) => {
+              const existing = newMap.get(sessionId);
+              if (existing && existing.score !== player.score) {
+                newMap.set(sessionId, {
+                  ...existing,
+                  score: player.score,
+                  words: Array.from(player.words || []).map((w: any) => ({
+                    id: w.id,
+                    word: w.word,
+                    score: w.score,
+                    ownerId: w.ownerId,
+                  })),
+                });
+              }
+            });
+            return newMap;
+          });
         });
 
         // Listen to letters
@@ -141,8 +168,9 @@ export function Game() {
           };
 
           updatePlayer();
-          player.listen('score', updatePlayer);
+          // Update player when words change
           player.words?.onAdd(updatePlayer);
+          player.words?.onRemove(updatePlayer);
         });
 
         gameRoom.state.players.onRemove((_: any, sessionId: string) => {
