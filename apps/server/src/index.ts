@@ -47,6 +47,18 @@ async function main() {
     res.json({ status: 'ok', dictionary: dictionaryService.isLoaded });
   });
 
+  // Client error logging endpoint - logs browser errors to server console
+  app.post('/api/log-error', (req, res) => {
+    const { error, componentStack, url, userAgent } = req.body;
+    console.error(`[CLIENT ERROR] ${url}`);
+    console.error(`  Message: ${error}`);
+    if (componentStack) {
+      console.error(`  Component Stack: ${componentStack}`);
+    }
+    console.error(`  User Agent: ${userAgent}`);
+    res.json({ logged: true });
+  });
+
   // Auth routes
   app.get('/auth/google', passport.authenticate('google', { scope: ['profile', 'email'] }));
 

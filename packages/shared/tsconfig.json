@@ -5,7 +5,8 @@
     "rootDir": "./src",
     "composite": true,
     "experimentalDecorators": true,
-    "emitDecoratorMetadata": true
+    "emitDecoratorMetadata": false,
+    "useDefineForClassFields": false
   },
   "include": ["src/**/*"]
 }
