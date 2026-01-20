@@ -1,4 +1,5 @@
 import { nanoid } from 'nanoid';
+import { readFile } from 'fs/promises';
 import type { DictionaryService } from './DictionaryService.js';
 import type { Letter } from '@swipe/shared';
 import { GAME_CONSTANTS } from '@swipe/shared';
@@ -36,8 +37,8 @@ const DIFFICULTY_CONFIGS: Record<AIDifficulty, AIConfig> = {
     stealChance: 0.3,
   },
   hard: {
-    minReactionTime: 1500,
-    maxReactionTime: 5000,
+    minReactionTime: 3000,
+    maxReactionTime: 6000,
     minWordLength: 4,
     maxWordLength: 15,
     findChance: 0.8,
@@ -62,8 +63,59 @@ export class AIPlayerService {
   private dictionary: DictionaryService;
   private wordCache: Map<string, string[]> = new Map();
 
+  // Tiered word sets - AI can only use words from their difficulty level
+  private wordsByDifficulty: Record<AIDifficulty, Set<string>> = {
+    easy: new Set(),
+    medium: new Set(),
+    hard: new Set(),
+  };
+  private loaded: boolean = false;
+
   constructor(dictionary: DictionaryService) {
     this.dictionary = dictionary;
+  }
+
+  /**
+   * Load tiered word lists for AI vocabulary
+   */
+  async loadWordLists(dataDir: string): Promise<void> {
+    if (this.loaded) return;
+
+    console.log('Loading AI word lists...');
+    const start = Date.now();
+
+    try {
+      // Load all three difficulty word lists
+      const files: Record<AIDifficulty, string> = {
+        easy: 'easy_words.txt',
+        medium: 'medium_words.txt',
+        hard: 'hard_words.txt',
+      };
+
+      for (const [difficulty, filename] of Object.entries(files) as [AIDifficulty, string][]) {
+        const content = await readFile(`${dataDir}/${filename}`, 'utf-8');
+        for (const word of content.split(/\r?\n/)) {
+          const cleaned = word.trim().toUpperCase();
+          if (cleaned.length >= GAME_CONSTANTS.MIN_WORD_LENGTH) {
+            this.wordsByDifficulty[difficulty].add(cleaned);
+          }
+        }
+      }
+
+      this.loaded = true;
+      const elapsed = Date.now() - start;
+      console.log(`Loaded AI word lists in ${elapsed}ms: easy=${this.wordsByDifficulty.easy.size}, medium=${this.wordsByDifficulty.medium.size}, hard=${this.wordsByDifficulty.hard.size}`);
+    } catch (error) {
+      console.error('Failed to load AI word lists:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Check if a word is in the AI's vocabulary for a given difficulty
+   */
+  private isInVocabulary(word: string, difficulty: AIDifficulty): boolean {
+    return this.wordsByDifficulty[difficulty].has(word);
   }
 
   createAIPlayer(difficulty: AIDifficulty): AIPlayer {
@@ -100,12 +152,12 @@ export class AIPlayerService {
 
     // Get letter characters (handle blanks as wildcards)
     const letterChars = availableLetters.map(l => l.isBlank ? '*' : l.char);
-    const cacheKey = letterChars.sort().join('');
+    const cacheKey = `${difficulty}:${letterChars.sort().join('')}`;
 
     // Check cache first
     let possibleWords = this.wordCache.get(cacheKey);
     if (!possibleWords) {
-      possibleWords = this.findAllPossibleWords(letterChars);
+      possibleWords = this.findAllPossibleWords(letterChars, difficulty);
       this.wordCache.set(cacheKey, possibleWords);
 
       // Limit cache size
@@ -145,15 +197,14 @@ export class AIPlayerService {
   /**
    * Find all valid words that can be made from given letters
    */
-  private findAllPossibleWords(letters: string[]): string[] {
+  private findAllPossibleWords(letters: string[], difficulty: AIDifficulty): string[] {
     const results: string[] = [];
     const letterCounts = this.getLetterCounts(letters);
     const blankCount = letterCounts['*'] || 0;
     delete letterCounts['*'];
 
-    // Generate all permutations and check against dictionary
-    // This is a simplified approach - for production, use a more efficient algorithm
-    this.generateWords(letterCounts, blankCount, '', results);
+    // Generate all permutations and check against difficulty-appropriate vocabulary
+    this.generateWords(letterCounts, blankCount, '', results, difficulty);
 
     return results;
   }
@@ -163,11 +214,12 @@ export class AIPlayerService {
     blanks: number,
     current: string,
     results: string[],
+    difficulty: AIDifficulty,
     maxLength: number = 10
   ): void {
-    // Check if current is a valid word
+    // Check if current is a valid word in AI's vocabulary
     if (current.length >= GAME_CONSTANTS.MIN_WORD_LENGTH) {
-      if (this.dictionary.isValidWord(current) && !results.includes(current)) {
+      if (this.isInVocabulary(current, difficulty) && !results.includes(current)) {
         results.push(current);
       }
     }
@@ -181,7 +233,7 @@ export class AIPlayerService {
     for (const [letter, count] of Object.entries(available)) {
       if (count > 0) {
         available[letter] = count - 1;
-        this.generateWords(available, blanks, current + letter, results, maxLength);
+        this.generateWords(available, blanks, current + letter, results, difficulty, maxLength);
         available[letter] = count;
       }
     }
@@ -190,7 +242,7 @@ export class AIPlayerService {
     if (blanks > 0) {
       for (let i = 65; i <= 90; i++) {
         const letter = String.fromCharCode(i);
-        this.generateWords(available, blanks - 1, current + letter, results, maxLength);
+        this.generateWords(available, blanks - 1, current + letter, results, difficulty, maxLength);
       }
     }
   }
@@ -217,5 +269,9 @@ export class AIPlayerService {
    */
   shouldAttemptSteal(difficulty: AIDifficulty): boolean {
     return Math.random() < DIFFICULTY_CONFIGS[difficulty].stealChance;
+  }
+
+  get isLoaded(): boolean {
+    return this.loaded;
   }
 }
