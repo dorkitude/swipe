@@ -11,6 +11,7 @@ import { env, validateEnv } from './config/environment.js';
 import { LobbyRoom } from './rooms/LobbyRoom.js';
 import { GameRoom } from './rooms/GameRoom.js';
 import { dictionaryService } from './services/DictionaryService.js';
+import { AIPlayerService } from './services/AIPlayerService.js';
 import './config/auth.js'; // Initialize passport strategies
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -95,16 +96,25 @@ async function main() {
   });
 
   // Load dictionary before defining rooms
-  const dictionaryPath = join(__dirname, '../data/wordlist.txt');
+  const dataDir = join(__dirname, '../data');
+  const dictionaryPath = join(dataDir, 'wordlist.txt');
   try {
     await dictionaryService.loadDictionary(dictionaryPath);
   } catch (error) {
     console.warn('Dictionary not found, word validation will be disabled');
   }
 
+  // Create and load AI service with tiered word lists
+  const aiService = new AIPlayerService(dictionaryService);
+  try {
+    await aiService.loadWordLists(dataDir);
+  } catch (error) {
+    console.warn('AI word lists not found, AI will use full dictionary');
+  }
+
   // Define rooms
   gameServer.define('lobby', LobbyRoom);
-  gameServer.define('game', GameRoom, { dictionary: dictionaryService });
+  gameServer.define('game', GameRoom, { dictionary: dictionaryService, aiService });
 
   // Start server
   httpServer.listen(env.port, () => {
