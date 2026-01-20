@@ -1,4 +1,5 @@
 import { Component, type ReactNode, type ErrorInfo } from 'react';
+import { reportError } from '../utils/errorReporter';
 
 interface Props {
   children: ReactNode;
@@ -9,36 +10,15 @@ interface State {
   error: Error | null;
 }
 
-async function reportError(error: string, componentStack?: string) {
-  try {
-    await fetch('/api/log-error', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        error,
-        componentStack,
-        url: window.location.href,
-        userAgent: navigator.userAgent,
-      }),
-    });
-  } catch (e) {
-    // Silently fail if reporting fails
-  }
-}
-
 // Set up global error handler
 if (typeof window !== 'undefined') {
   window.onerror = (message, source, lineno, colno, error) => {
-    const errorMsg = `${message} at ${source}:${lineno}:${colno}`;
-    console.error('[Global Error]', errorMsg, error);
-    reportError(errorMsg);
+    reportError(error || message, `GlobalError at ${source}:${lineno}:${colno}`);
     return false;
   };
 
   window.onunhandledrejection = (event) => {
-    const errorMsg = `Unhandled Promise Rejection: ${event.reason}`;
-    console.error('[Unhandled Rejection]', errorMsg);
-    reportError(errorMsg);
+    reportError(event.reason, 'UnhandledRejection');
   };
 }
 
@@ -53,8 +33,7 @@ export class ErrorBoundary extends Component<Props, State> {
   }
 
   componentDidCatch(error: Error, errorInfo: ErrorInfo) {
-    console.error('[React Error Boundary]', error, errorInfo);
-    reportError(error.toString(), errorInfo.componentStack || undefined);
+    reportError(error, `ReactErrorBoundary\n${errorInfo.componentStack || ''}`);
   }
 
   render() {

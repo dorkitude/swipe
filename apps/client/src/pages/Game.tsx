@@ -3,6 +3,7 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { Client, Room } from 'colyseus.js';
 import { useUser } from '../context/UserContext';
 import { GAME_CONSTANTS } from '@swipe/shared';
+import { reportError } from '../utils/errorReporter';
 import styles from './Game.module.css';
 
 type AIDifficulty = 'easy' | 'medium' | 'hard';
@@ -168,7 +169,7 @@ export function Game() {
         });
 
       } catch (err) {
-        console.error('Failed to connect:', err);
+        reportError(err, 'Game.connect');
         setError('Failed to connect to game server');
       }
     };
