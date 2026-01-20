@@ -133,8 +133,8 @@ export function Game() {
           });
         });
 
-        // Listen to letters
-        gameRoom.state.availableLetters.onAdd((letter: any) => {
+        // Listen to letters (with null check)
+        gameRoom.state.availableLetters?.onAdd((letter: any) => {
           setLetters((prev) => [...prev, {
             id: letter.id,
             char: letter.char,
@@ -143,12 +143,12 @@ export function Game() {
           }]);
         });
 
-        gameRoom.state.availableLetters.onRemove((letter: any) => {
+        gameRoom.state.availableLetters?.onRemove((letter: any) => {
           setLetters((prev) => prev.filter((l) => l.id !== letter.id));
         });
 
-        // Listen to players
-        gameRoom.state.players.onAdd((player: any, sessionId: string) => {
+        // Listen to players (with null check)
+        gameRoom.state.players?.onAdd((player: any, sessionId: string) => {
           const updatePlayer = () => {
             setPlayers((prev) => {
               const newMap = new Map(prev);
@@ -173,7 +173,7 @@ export function Game() {
           player.words?.onRemove(updatePlayer);
         });
 
-        gameRoom.state.players.onRemove((_: any, sessionId: string) => {
+        gameRoom.state.players?.onRemove((_: any, sessionId: string) => {
           setPlayers((prev) => {
             const newMap = new Map(prev);
             newMap.delete(sessionId);
