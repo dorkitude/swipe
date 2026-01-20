@@ -8,8 +8,13 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 16px 24px;
+  padding: 12px 24px;
   border-bottom: 1px solid var(--bg-tertiary);
+}
+
+.headerButtons {
+  display: flex;
+  gap: 8px;
 }
 
 .header button {
@@ -24,22 +29,11 @@
   letter-spacing: 2px;
 }
 
-.timer {
-  font-size: 32px;
-  font-weight: 700;
-  color: var(--accent-secondary);
-  min-width: 60px;
-  text-align: right;
-}
-
-.timerWarning {
-  color: var(--accent-danger);
-  animation: pulse 0.5s ease-in-out infinite;
-}
-
-@keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.5; }
+.roomNameHeader {
+  font-size: 14px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 1px;
 }
 
 .status {
@@ -50,34 +44,37 @@
   background: var(--bg-secondary);
 }
 
+/* Main layout - game area + move log */
 .main {
   flex: 1;
   display: grid;
-  grid-template-columns: 1fr 300px;
-  gap: 24px;
-  padding: 24px;
-  max-width: 1200px;
+  grid-template-columns: 1fr 280px;
+  gap: 0;
+  max-width: 1400px;
   margin: 0 auto;
   width: 100%;
 }
 
-.lettersSection {
+/* Game area - letters, input, player words */
+.gameArea {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 32px;
+  padding: 24px;
+  gap: 24px;
 }
 
+/* Available letters pool */
 .letters {
   display: flex;
-  gap: 12px;
+  gap: 10px;
   flex-wrap: wrap;
   justify-content: center;
 }
 
 .letterTile {
-  width: 64px;
-  height: 64px;
+  width: 60px;
+  height: 60px;
   background: var(--bg-secondary);
   border: 2px solid var(--accent-primary);
   border-radius: 8px;
@@ -86,6 +83,7 @@
   align-items: center;
   justify-content: center;
   position: relative;
+  transition: all 0.2s ease;
 }
 
 .letterTile.blank {
@@ -93,8 +91,30 @@
   border-color: var(--accent-secondary);
 }
 
+.letterTile.fading {
+  opacity: 0.6;
+  border-color: var(--accent-warning);
+  animation: pulse 1s ease-in-out infinite;
+}
+
+.letterTile.expiring {
+  opacity: 0.4;
+  border-color: var(--accent-danger);
+  animation: flicker 0.2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 0.4; }
+}
+
+@keyframes flicker {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 0.1; }
+}
+
 .letterChar {
-  font-size: 28px;
+  font-size: 26px;
   font-weight: 700;
 }
 
@@ -102,7 +122,7 @@
   position: absolute;
   bottom: 4px;
   right: 6px;
-  font-size: 11px;
+  font-size: 10px;
   color: var(--accent-primary);
 }
 
@@ -110,105 +130,203 @@
   color: var(--accent-secondary);
 }
 
+/* Input form */
 .inputForm {
   display: flex;
   gap: 12px;
   width: 100%;
-  max-width: 500px;
+  max-width: 450px;
 }
 
 .inputForm input {
   flex: 1;
-  font-size: 24px;
+  font-size: 22px;
   text-align: center;
   text-transform: uppercase;
   letter-spacing: 4px;
+  padding: 12px;
 }
 
 .inputForm button {
-  padding: 12px 32px;
+  padding: 12px 28px;
 }
 
-.hint {
-  color: var(--text-muted);
-  font-size: 14px;
+/* Players words section - at bottom */
+.playersWords {
+  width: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 24px;
+  padding: 24px 0 16px;
+  border-top: 1px solid var(--bg-tertiary);
+  margin-top: auto;
 }
 
-.playersSection {
-  background: var(--bg-secondary);
-  border-radius: 12px;
-  padding: 20px;
-}
-
-.playersSection h2 {
-  font-size: 16px;
-  color: var(--text-secondary);
-  margin-bottom: 16px;
-  text-transform: uppercase;
-  letter-spacing: 1px;
-}
-
-.playersList {
+.playerWordSection {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 8px;
+  min-width: 200px;
+  max-width: 400px;
+  flex: 1;
 }
 
-.playerCard {
-  background: var(--bg-tertiary);
-  border-radius: 8px;
-  padding: 12px;
-  border-left: 3px solid var(--text-muted);
+.playerWordSection.me {
+  border-left: 3px solid var(--accent-primary);
+  padding-left: 12px;
 }
 
-.playerCard.me {
-  border-left-color: var(--accent-primary);
+.playerWordSection.ai {
+  border-left: 3px solid var(--accent-secondary);
+  padding-left: 12px;
 }
 
-.playerCard.ai {
-  border-left-color: var(--accent-secondary);
-}
-
-.playerHeader {
+.playerLabel {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 8px;
+  gap: 16px;
 }
 
 .playerName {
   font-weight: 600;
   font-size: 14px;
+  color: var(--text-secondary);
 }
 
-.me .playerName {
+.playerWordSection.me .playerName {
   color: var(--accent-primary);
 }
 
-.ai .playerName {
+.playerWordSection.ai .playerName {
   color: var(--accent-secondary);
 }
 
 .playerScore {
   font-weight: 700;
-  font-size: 18px;
+  font-size: 16px;
   color: var(--accent-secondary);
 }
 
-.playerWords {
+.wordsList {
   display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
+  flex-direction: column;
+  gap: 6px;
 }
 
-.wordTag {
-  background: var(--bg-secondary);
-  padding: 2px 8px;
+.wordWithTiles {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.wordTiles {
+  display: flex;
+  gap: 2px;
+}
+
+.miniTile {
+  width: 28px;
+  height: 32px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--accent-primary);
   border-radius: 4px;
-  font-size: 11px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.miniChar {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.wordScore {
+  font-size: 12px;
+  color: var(--accent-secondary);
+  font-weight: 600;
+}
+
+/* Move log sidebar */
+.moveLog {
+  background: var(--bg-secondary);
+  border-left: 1px solid var(--bg-tertiary);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 60px);
+  overflow: hidden;
+}
+
+.logTitle {
+  font-size: 14px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--bg-tertiary);
+}
+
+.logEntries {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.logEntry {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 6px;
+  padding: 8px 10px;
+  background: var(--bg-tertiary);
+  border-radius: 6px;
+  font-size: 13px;
+  border-left: 3px solid var(--accent-primary);
+}
+
+.logEntry.aiEntry {
+  border-left-color: var(--accent-secondary);
+}
+
+.logEntry.swipeEntry {
+  border-left-color: var(--accent-warning);
+}
+
+.logHandle {
+  font-weight: 600;
   color: var(--text-secondary);
 }
 
+.logSwipeFrom {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.logWord {
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.logScore {
+  color: var(--accent-secondary);
+  font-weight: 600;
+  margin-left: auto;
+}
+
+.logEmpty {
+  color: var(--text-muted);
+  font-style: italic;
+  text-align: center;
+  padding: 20px;
+}
+
+/* Feedback messages */
 .feedbackContainer {
   position: fixed;
   bottom: 100px;
@@ -219,6 +337,7 @@
   align-items: center;
   gap: 8px;
   pointer-events: none;
+  z-index: 100;
 }
 
 .feedbackMessage {
@@ -226,6 +345,9 @@
   font-weight: 600;
   animation: fadeUp 3s ease-out forwards;
   text-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+  background: rgba(0, 0, 0, 0.6);
+  padding: 8px 16px;
+  border-radius: 8px;
 }
 
 @keyframes fadeUp {
@@ -250,21 +372,35 @@
   font-size: 18px;
 }
 
-@media (max-width: 768px) {
+/* Responsive */
+@media (max-width: 900px) {
   .main {
     grid-template-columns: 1fr;
   }
 
-  .playersSection {
+  .moveLog {
     order: -1;
+    height: auto;
+    max-height: 200px;
+    border-left: none;
+    border-bottom: 1px solid var(--bg-tertiary);
   }
 
   .letterTile {
-    width: 52px;
-    height: 52px;
+    width: 50px;
+    height: 50px;
   }
 
   .letterChar {
-    font-size: 22px;
+    font-size: 20px;
+  }
+
+  .miniTile {
+    width: 24px;
+    height: 28px;
+  }
+
+  .miniChar {
+    font-size: 14px;
   }
 }

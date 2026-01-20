@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
+import { useNavigate, useLocation, useSearchParams } from 'react-router-dom';
 import { Client, Room } from 'colyseus.js';
 import { useUser } from '../context/UserContext';
 import { GAME_CONSTANTS } from '@swipe/shared';
@@ -17,6 +17,7 @@ interface Letter {
   char: string;
   value: number;
   isBlank: boolean;
+  createdAt: number;
 }
 
 interface Word {
@@ -39,24 +40,45 @@ interface FeedbackMessage {
   color: string;
 }
 
+interface MoveLogEntry {
+  id: number;
+  time: number;
+  type: 'claim' | 'swipe';
+  handle: string;
+  word: string;
+  score: number;
+  isAI: boolean;
+  stolenWords?: string[];
+}
+
 export function Game() {
   const navigate = useNavigate();
   const location = useLocation();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { user } = useUser();
   const state = location.state as LocationState | null;
+  const roomIdFromUrl = searchParams.get('roomId');
+  const testLetters = searchParams.get('testLetters'); // For deterministic testing
+  const aiDifficulty = searchParams.get('ai') as AIDifficulty | null; // e.g., ?ai=easy
 
   const [room, setRoom] = useState<Room | null>(null);
   const [phase, setPhase] = useState<string>('connecting');
+  const [roomName, setRoomName] = useState<string>('');
   const [letters, setLetters] = useState<Letter[]>([]);
   const [players, setPlayers] = useState<Map<string, Player>>(new Map());
   const [wordInput, setWordInput] = useState('');
-  const [timeLeft, setTimeLeft] = useState<number | null>(null);
   const [feedback, setFeedback] = useState<FeedbackMessage[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [now, setNow] = useState(Date.now());
+  const [moveLog, setMoveLog] = useState<MoveLogEntry[]>([]);
+  const [lastPoolActivity, setLastPoolActivity] = useState<number>(Date.now());
 
   const inputRef = useRef<HTMLInputElement>(null);
   const feedbackIdRef = useRef(0);
+  const moveLogIdRef = useRef(0);
   const clientRef = useRef<Client | null>(null);
+  const connectingRef = useRef(false);
+  const moveLogRef = useRef<HTMLDivElement>(null);
 
   const showFeedback = useCallback((text: string, color: string) => {
     const id = ++feedbackIdRef.current;
@@ -69,9 +91,13 @@ export function Game() {
   // Connect to game room
   useEffect(() => {
     if (!user) return;
+    if (connectingRef.current) return; // Prevent double connection (React StrictMode)
+    connectingRef.current = true;
 
     const connect = async () => {
       try {
+        console.log('Connecting with testLetters:', testLetters, 'aiDifficulty:', aiDifficulty);
+
         const wsUrl = import.meta.env.PROD
           ? `wss://${window.location.host}`
           : 'ws://localhost:2567';
@@ -79,18 +105,52 @@ export function Game() {
         const client = new Client(wsUrl);
         clientRef.current = client;
 
-        const gameRoom = await client.joinOrCreate('game', {
-          odId: user.id,
-          handle: user.handle,
-          aiOpponents: state?.aiOpponents,
-        });
+        let gameRoom: Room;
+
+        const aiOpponents = aiDifficulty ? [{ difficulty: aiDifficulty }] : state?.aiOpponents;
+
+        if (roomIdFromUrl) {
+          // Rejoin existing room by ID
+          try {
+            gameRoom = await client.joinById(roomIdFromUrl, {
+              odId: user.id,
+              handle: user.handle,
+              aiOpponents,
+              testLetters: testLetters || undefined,
+            });
+            console.log('Rejoined room:', roomIdFromUrl);
+          } catch (e) {
+            // Room doesn't exist anymore, create new one
+            console.log('Room not found, creating new one');
+            gameRoom = await client.joinOrCreate('game', {
+              odId: user.id,
+              handle: user.handle,
+              aiOpponents,
+              testLetters: testLetters || undefined,
+            });
+          }
+        } else {
+          // Create or join new room
+          gameRoom = await client.joinOrCreate('game', {
+            odId: user.id,
+            handle: user.handle,
+            aiOpponents,
+            testLetters: testLetters || undefined,
+          });
+        }
+
+        // Update URL with roomId for sharing/rejoining (preserve other params)
+        if (gameRoom.roomId && gameRoom.roomId !== roomIdFromUrl) {
+          const newParams = new URLSearchParams(searchParams);
+          newParams.set('roomId', gameRoom.roomId);
+          setSearchParams(newParams, { replace: true });
+        }
 
         setRoom(gameRoom);
         setPhase('waiting');
 
         // Listen to state changes via onStateChange
         let lastPhase = '';
-        let timerInterval: ReturnType<typeof setInterval> | null = null;
 
         gameRoom.onStateChange((state) => {
           // Update phase
@@ -100,59 +160,31 @@ export function Game() {
             setPhase(state.phase);
           }
 
-          // Update timer
-          if (state.roundEndTime > 0) {
-            if (timerInterval) clearInterval(timerInterval);
-            const updateTimer = () => {
-              const remaining = Math.max(0, Math.ceil((state.roundEndTime - Date.now()) / 1000));
-              setTimeLeft(remaining);
-            };
-            updateTimer();
-            timerInterval = setInterval(updateTimer, 100);
+          // Update room name
+          if (state.roomName) {
+            setRoomName(state.roomName);
           }
 
-          // Update all player scores
-          setPlayers((prev) => {
-            const newMap = new Map(prev);
-            state.players.forEach((player: any, sessionId: string) => {
-              const existing = newMap.get(sessionId);
-              if (existing && existing.score !== player.score) {
-                newMap.set(sessionId, {
-                  ...existing,
-                  score: player.score,
-                  words: Array.from(player.words || []).map((w: any) => ({
-                    id: w.id,
-                    word: w.word,
-                    score: w.score,
-                    ownerId: w.ownerId,
-                  })),
-                });
-              }
+          // Sync letters from state
+          if (state.availableLetters) {
+            const letterArray: Letter[] = [];
+            state.availableLetters.forEach((letter: any) => {
+              letterArray.push({
+                id: letter.id,
+                char: letter.char,
+                value: letter.value,
+                isBlank: letter.isBlank,
+                createdAt: letter.createdAt,
+              });
             });
-            return newMap;
-          });
-        });
+            setLetters(letterArray);
+          }
 
-        // Listen to letters (with null check)
-        gameRoom.state.availableLetters?.onAdd((letter: any) => {
-          setLetters((prev) => [...prev, {
-            id: letter.id,
-            char: letter.char,
-            value: letter.value,
-            isBlank: letter.isBlank,
-          }]);
-        });
-
-        gameRoom.state.availableLetters?.onRemove((letter: any) => {
-          setLetters((prev) => prev.filter((l) => l.id !== letter.id));
-        });
-
-        // Listen to players (with null check)
-        gameRoom.state.players?.onAdd((player: any, sessionId: string) => {
-          const updatePlayer = () => {
-            setPlayers((prev) => {
-              const newMap = new Map(prev);
-              newMap.set(sessionId, {
+          // Sync players from state
+          if (state.players) {
+            const playerMap = new Map<string, Player>();
+            state.players.forEach((player: any, sessionId: string) => {
+              playerMap.set(sessionId, {
                 sessionId,
                 handle: player.handle,
                 score: player.score,
@@ -163,22 +195,14 @@ export function Game() {
                   ownerId: w.ownerId,
                 })),
               });
-              return newMap;
             });
-          };
+            setPlayers(playerMap);
+          }
 
-          updatePlayer();
-          // Update player when words change
-          player.words?.onAdd(updatePlayer);
-          player.words?.onRemove(updatePlayer);
-        });
-
-        gameRoom.state.players?.onRemove((_: any, sessionId: string) => {
-          setPlayers((prev) => {
-            const newMap = new Map(prev);
-            newMap.delete(sessionId);
-            return newMap;
-          });
+          // Sync lastPoolActivity for stagnation detection
+          if (state.lastPoolActivity) {
+            setLastPoolActivity(state.lastPoolActivity);
+          }
         });
 
         // Listen to messages
@@ -194,6 +218,32 @@ export function Game() {
         gameRoom.onMessage('wordClaimed', (data: any) => {
           const color = data.isAI ? 'var(--accent-secondary)' : 'var(--accent-primary)';
           showFeedback(`${data.handle}: ${data.word} (+${data.score})`, color);
+          // Add to move log
+          setMoveLog((prev) => [...prev, {
+            id: ++moveLogIdRef.current,
+            time: Date.now(),
+            type: 'claim',
+            handle: data.handle,
+            word: data.word,
+            score: data.score,
+            isAI: data.isAI,
+          }]);
+        });
+
+        gameRoom.onMessage('wordStolen', (data: any) => {
+          const stolenList = data.stolenWords.map((w: any) => w.word).join(' + ');
+          showFeedback(`${data.stealerHandle} swiped ${stolenList} → ${data.newWord}! 🔥`, 'var(--accent-warning)');
+          // Add to move log
+          setMoveLog((prev) => [...prev, {
+            id: ++moveLogIdRef.current,
+            time: Date.now(),
+            type: 'swipe',
+            handle: data.stealerHandle,
+            word: data.newWord,
+            score: data.score,
+            isAI: data.stealerHandle.includes('Bot'),
+            stolenWords: data.stolenWords.map((w: any) => w.word),
+          }]);
         });
 
       } catch (err) {
@@ -209,13 +259,20 @@ export function Game() {
         room?.leave();
       }
     };
-  }, [user, state?.aiOpponents, showFeedback]);
+  }, [user, state?.aiOpponents, showFeedback, roomIdFromUrl, setSearchParams]);
 
   // Focus input when playing
   useEffect(() => {
     if (phase === 'playing' && inputRef.current) {
       inputRef.current.focus();
     }
+  }, [phase]);
+
+  // Update time for letter age calculations
+  useEffect(() => {
+    if (phase !== 'playing') return;
+    const interval = setInterval(() => setNow(Date.now()), 500);
+    return () => clearInterval(interval);
   }, [phase]);
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -227,7 +284,8 @@ export function Game() {
       return;
     }
 
-    room.send('submitWord', { word: wordInput.toUpperCase() });
+    // Server will figure out if this is a new word or a swipe
+    room.send('makeWord', { word: wordInput.toUpperCase() });
   };
 
   const handleBack = () => {
@@ -235,8 +293,28 @@ export function Game() {
     navigate('/lobby');
   };
 
+  const handleNewGame = () => {
+    room?.leave();
+    // Keep AI difficulty if present, but drop the roomId to force new room
+    const params = new URLSearchParams();
+    if (aiDifficulty) {
+      params.set('ai', aiDifficulty);
+    }
+    // Navigate to same page but without roomId - forces new room creation
+    navigate(`/game${params.toString() ? `?${params.toString()}` : ''}`, { replace: true });
+    // Force page reload to reset all state cleanly
+    window.location.reload();
+  };
+
   const mySessionId = room?.sessionId;
-  const sortedPlayers = Array.from(players.values()).sort((a, b) => b.score - a.score);
+  // Sort players: current user first, then by score descending
+  const sortedPlayers = Array.from(players.values()).sort((a, b) => {
+    // Current user always first
+    if (a.sessionId === mySessionId) return -1;
+    if (b.sessionId === mySessionId) return 1;
+    // Then sort by score
+    return b.score - a.score;
+  });
 
   if (error) {
     return (
@@ -254,44 +332,28 @@ export function Game() {
   return (
     <div className={styles.container}>
       <header className={styles.header}>
-        <button className="btn-secondary" onClick={handleBack}>
-          Back
-        </button>
-        <h1 className={styles.logo}>SWIPE</h1>
-        <div className={styles.timer}>
-          {timeLeft !== null && (
-            <span className={timeLeft <= 5 ? styles.timerWarning : ''}>
-              {timeLeft}
-            </span>
-          )}
+        <div className={styles.headerButtons}>
+          <button className="btn-secondary" onClick={handleBack}>
+            Back
+          </button>
+          <button className="btn-secondary" onClick={handleNewGame}>
+            New Game
+          </button>
         </div>
+        <h1 className={styles.logo}>SWIPE</h1>
+        <div className={styles.roomNameHeader}>{roomName}</div>
       </header>
 
-      <div className={styles.status}>
-        {phase === 'connecting' && 'Connecting...'}
-        {phase === 'waiting' && 'Waiting for game to start...'}
-        {phase === 'countdown' && 'Get ready!'}
-        {phase === 'playing' && 'GO! Type words!'}
-        {phase === 'round_end' && 'Round over! Next round starting...'}
-        {phase === 'game_end' && 'Game over!'}
-      </div>
+      {phase !== 'playing' && (
+        <div className={styles.status}>
+          {phase === 'connecting' && 'Connecting...'}
+          {phase === 'waiting' && 'Waiting for players...'}
+        </div>
+      )}
 
       <main className={styles.main}>
-        <section className={styles.lettersSection}>
-          <div className={styles.letters}>
-            {letters.map((letter) => (
-              <div
-                key={letter.id}
-                className={`${styles.letterTile} ${letter.isBlank ? styles.blank : ''}`}
-              >
-                <span className={styles.letterChar}>
-                  {letter.isBlank ? '★' : letter.char}
-                </span>
-                <span className={styles.letterValue}>{letter.value}</span>
-              </div>
-            ))}
-          </div>
-
+        <section className={styles.gameArea}>
+          {/* 1. Input form */}
           <form className={styles.inputForm} onSubmit={handleSubmit}>
             <input
               ref={inputRef}
@@ -314,38 +376,96 @@ export function Game() {
             </button>
           </form>
 
-          <p className={styles.hint}>
-            Type a word (min {GAME_CONSTANTS.MIN_WORD_LENGTH} letters) and press Enter
-          </p>
-        </section>
+          {/* 2. Available letters pool */}
+          <div className={styles.letters}>
+            {(() => {
+              // Check if pool is stagnant
+              const stagnationTime = now - lastPoolActivity;
+              const isPoolStagnant = stagnationTime >= GAME_CONSTANTS.LETTER_FADE_START_MS;
+              const isPoolExpiring = stagnationTime >= GAME_CONSTANTS.LETTER_EXPIRE_MS - 2000;
 
-        <section className={styles.playersSection}>
-          <h2>Players</h2>
-          <div className={styles.playersList}>
+              // Find the 5 oldest letters (only relevant when stagnant)
+              const sortedByAge = [...letters].sort((a, b) => a.createdAt - b.createdAt);
+              const oldestFiveIds = new Set(sortedByAge.slice(0, 5).map(l => l.id));
+
+              return letters.map((letter) => {
+                const isInOldestFive = oldestFiveIds.has(letter.id);
+                const isFading = isPoolStagnant && isInOldestFive;
+                const isExpiring = isPoolExpiring && isInOldestFive;
+
+                return (
+                  <div
+                    key={letter.id}
+                    className={`${styles.letterTile} ${letter.isBlank ? styles.blank : ''} ${isFading ? styles.fading : ''} ${isExpiring ? styles.expiring : ''}`}
+                  >
+                    <span className={styles.letterChar}>
+                      {letter.isBlank ? '★' : letter.char}
+                    </span>
+                    <span className={styles.letterValue}>{letter.value}</span>
+                  </div>
+                );
+              });
+            })()}
+          </div>
+
+          {/* 3. Players with word tiles */}
+          <div className={styles.playersWords}>
             {sortedPlayers.map((player) => (
               <div
                 key={player.sessionId}
-                className={`${styles.playerCard} ${player.sessionId === mySessionId ? styles.me : ''} ${player.sessionId.startsWith('ai_') ? styles.ai : ''}`}
+                className={`${styles.playerWordSection} ${player.sessionId === mySessionId ? styles.me : ''} ${player.sessionId.startsWith('ai_') ? styles.ai : ''}`}
               >
-                <div className={styles.playerHeader}>
+                <div className={styles.playerLabel}>
                   <span className={styles.playerName}>
                     {player.handle}
                     {player.sessionId.startsWith('ai_') && ' 🤖'}
                     {player.sessionId === mySessionId && ' (You)'}
                   </span>
-                  <span className={styles.playerScore}>{player.score}</span>
+                  <span className={styles.playerScore}>{player.score} pts</span>
                 </div>
-                <div className={styles.playerWords}>
-                  {player.words.map((word) => (
-                    <span key={word.id} className={styles.wordTag}>
-                      {word.word}
-                    </span>
+                <div className={styles.wordsList}>
+                  {player.words.slice().reverse().map((word) => (
+                    <div key={word.id} className={styles.wordWithTiles}>
+                      <div className={styles.wordTiles}>
+                        {word.word.split('').map((char, i) => (
+                          <div key={i} className={styles.miniTile}>
+                            <span className={styles.miniChar}>{char}</span>
+                          </div>
+                        ))}
+                      </div>
+                      <span className={styles.wordScore}>+{word.score}</span>
+                    </div>
                   ))}
                 </div>
               </div>
             ))}
           </div>
         </section>
+
+        {/* Move log sidebar */}
+        <aside className={styles.moveLog} ref={moveLogRef}>
+          <h3 className={styles.logTitle}>Move Log</h3>
+          <div className={styles.logEntries}>
+            {moveLog.slice().reverse().map((entry) => (
+              <div
+                key={entry.id}
+                className={`${styles.logEntry} ${entry.type === 'swipe' ? styles.swipeEntry : ''} ${entry.isAI ? styles.aiEntry : ''}`}
+              >
+                <span className={styles.logHandle}>{entry.handle}</span>
+                {entry.type === 'swipe' && entry.stolenWords && (
+                  <span className={styles.logSwipeFrom}>
+                    {entry.stolenWords.join(' + ')} →
+                  </span>
+                )}
+                <span className={styles.logWord}>{entry.word}</span>
+                <span className={styles.logScore}>+{entry.score}</span>
+              </div>
+            ))}
+            {moveLog.length === 0 && (
+              <p className={styles.logEmpty}>No moves yet...</p>
+            )}
+          </div>
+        </aside>
       </main>
 
       <div className={styles.feedbackContainer}>
@@ -359,6 +479,7 @@ export function Game() {
           </div>
         ))}
       </div>
+
     </div>
   );
 }
