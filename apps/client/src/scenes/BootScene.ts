@@ -38,6 +38,7 @@ export class BootScene extends Phaser.Scene {
       }
     } catch (error) {
       console.error('Failed to check auth:', error);
+      // In dev mode, just go to login which has guest option
       this.scene.start('LoginScene');
     }
   }
