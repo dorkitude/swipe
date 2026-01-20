@@ -319,6 +319,12 @@
   margin-left: auto;
 }
 
+.logLostScore {
+  color: var(--accent-danger);
+  font-weight: 600;
+  margin-left: 8px;
+}
+
 .logEmpty {
   color: var(--text-muted);
   font-style: italic;

@@ -135,13 +135,10 @@ export class GameRoom extends Room<GameState> {
       this.log(`Test letters queued: ${options.testLetters}`);
     }
 
-    // Add AI opponents if specified (and not already present)
-    if (options.aiOpponents && this.aiService) {
+    // Add AI opponents if specified (and not already present from a previous session)
+    if (options.aiOpponents && this.aiService && this.aiStates.size === 0) {
       for (const ai of options.aiOpponents) {
-        // Only add AI if we don't already have AI players
-        if (this.aiStates.size === 0) {
-          this.addAIPlayer(ai.difficulty);
-        }
+        this.addAIPlayer(ai.difficulty);
       }
     }
 
@@ -187,6 +184,12 @@ export class GameRoom extends Room<GameState> {
       isAI: true,
       difficulty,
     });
+
+    // If game is already playing, start this AI thinking immediately
+    if (this.state.phase === 'playing') {
+      const aiState = this.aiStates.get(aiPlayer.id)!;
+      this.scheduleAIThink(aiPlayer.id, aiState);
+    }
 
     // Auto-start if we now have enough players
     if (this.state.players.size >= GAME_CONSTANTS.MIN_PLAYERS && this.state.phase === 'waiting') {
@@ -569,7 +572,7 @@ export class GameRoom extends Room<GameState> {
       stealerId: client.sessionId,
       stealerHandle: player.handle,
       newWord: wordStr,
-      stolenWords: targetWords.map(t => ({ word: t.word, ownerId: t.ownerId })),
+      stolenWords: targetWords.map(t => ({ word: t.word, ownerId: t.ownerId, score: t.score })),
       score: score,
     });
 
@@ -704,7 +707,7 @@ export class GameRoom extends Room<GameState> {
     }
 
     // Find target words and their owners
-    const targetWords: Array<{ id: string; word: string; letters: Letter[]; ownerId: string }> = [];
+    const targetWords: Array<{ id: string; word: string; letters: Letter[]; ownerId: string; score: number }> = [];
     for (const wordId of targetWordIds) {
       const word = this.state.allWords.find(w => w.id === wordId);
       if (!word) {
@@ -716,6 +719,7 @@ export class GameRoom extends Room<GameState> {
         word: word.word,
         letters: Array.from(word.letters),
         ownerId: word.ownerId,
+        score: word.score,
       });
     }
 
@@ -790,7 +794,7 @@ export class GameRoom extends Room<GameState> {
       stealerId: client.sessionId,
       stealerHandle: player.handle,
       newWord: newWord.word,
-      stolenWords: targetWords.map(t => ({ word: t.word, ownerId: t.ownerId })),
+      stolenWords: targetWords.map(t => ({ word: t.word, ownerId: t.ownerId, score: t.score })),
       score: newWord.score,
     });
 

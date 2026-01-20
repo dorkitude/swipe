@@ -40,6 +40,11 @@ interface FeedbackMessage {
   color: string;
 }
 
+interface StolenWordInfo {
+  word: string;
+  score: number;
+}
+
 interface MoveLogEntry {
   id: number;
   time: number;
@@ -48,7 +53,7 @@ interface MoveLogEntry {
   word: string;
   score: number;
   isAI: boolean;
-  stolenWords?: string[];
+  stolenWords?: StolenWordInfo[];
 }
 
 export function Game() {
@@ -242,7 +247,7 @@ export function Game() {
             word: data.newWord,
             score: data.score,
             isAI: data.stealerHandle.includes('Bot'),
-            stolenWords: data.stolenWords.map((w: any) => w.word),
+            stolenWords: data.stolenWords.map((w: any) => ({ word: w.word, score: w.score })),
           }]);
         });
 
@@ -454,11 +459,16 @@ export function Game() {
                 <span className={styles.logHandle}>{entry.handle}</span>
                 {entry.type === 'swipe' && entry.stolenWords && (
                   <span className={styles.logSwipeFrom}>
-                    {entry.stolenWords.join(' + ')} →
+                    {entry.stolenWords.map(w => w.word).join(' + ')} →
                   </span>
                 )}
                 <span className={styles.logWord}>{entry.word}</span>
                 <span className={styles.logScore}>+{entry.score}</span>
+                {entry.type === 'swipe' && entry.stolenWords && (
+                  <span className={styles.logLostScore}>
+                    −{entry.stolenWords.reduce((sum, w) => sum + w.score, 0)}
+                  </span>
+                )}
               </div>
             ))}
             {moveLog.length === 0 && (
