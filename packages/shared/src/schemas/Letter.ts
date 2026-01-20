@@ -6,4 +6,5 @@ export class Letter extends Schema {
   @type('number') value: number = 0;
   @type('boolean') isBlank: boolean = false;
   @type('string') usedAs: string = ''; // If blank, what letter it represents
+  @type('number') createdAt: number = 0; // When this letter was added to pool
 }

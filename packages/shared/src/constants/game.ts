@@ -1,7 +1,10 @@
 export const GAME_CONSTANTS = {
   // Letters
-  LETTERS_PER_ROUND: 8,
-  MIN_WORD_LENGTH: 4,
+  LETTERS_PER_ROUND: 10,
+  MIN_WORD_LENGTH: 2,
+  LETTER_REFILL_DELAY_MS: 3_000, // 3 seconds before letters refill
+  LETTER_FADE_START_MS: 10_000, // Letters start fading at 10 seconds
+  LETTER_EXPIRE_MS: 15_000, // Letters disappear at 15 seconds
 
   // Timing (milliseconds)
   ROUND_DURATION_MS: 35_000, // 35 seconds per round
