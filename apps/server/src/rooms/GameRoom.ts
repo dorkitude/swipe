@@ -23,6 +23,9 @@ interface AIState {
   claimedWords: Set<string>;
 }
 
+// Delay before AI can react to new letters (gives humans time to see them)
+const AI_FAIRNESS_DELAY_MS = 1500;
+
 export class GameRoom extends Room<GameState> {
   private letterPool: string[] = [];
   private dictionary?: DictionaryService;
@@ -32,14 +35,17 @@ export class GameRoom extends Room<GameState> {
   private refillTimeout?: ReturnType<typeof setTimeout>;
   private letterExpirationInterval?: ReturnType<typeof setInterval>;
   private testLetterQueue: string[] = []; // For deterministic testing
+  private lastLetterRefillTime: number = 0; // Track when letters last changed
 
-  /** Log with room name prefix */
+  /** Log with timestamp and room name prefix */
   private log(message: string) {
-    console.log(`[${this.state.roomName}] ${message}`);
+    const ts = new Date().toISOString().slice(11, 23); // HH:mm:ss.mmm
+    console.log(`[${ts}] [${this.state.roomName}] ${message}`);
   }
 
   private warn(message: string) {
-    console.warn(`[${this.state.roomName}] ${message}`);
+    const ts = new Date().toISOString().slice(11, 23);
+    console.warn(`[${ts}] [${this.state.roomName}] ${message}`);
   }
 
   override onCreate(options: { dictionary?: DictionaryService; aiService?: AIPlayerService }) {
@@ -287,8 +293,16 @@ export class GameRoom extends Room<GameState> {
     }, reactionTime);
   }
 
-  private aiThink(aiId: string, aiState: AIState) {
+  private async aiThink(aiId: string, aiState: AIState) {
     if (this.state.phase !== 'playing' || !this.aiService) return;
+
+    // Fairness delay: wait for humans to see new letters before AI can act
+    const timeSinceRefill = Date.now() - this.lastLetterRefillTime;
+    if (timeSinceRefill < AI_FAIRNESS_DELAY_MS) {
+      // Letters just appeared - wait a bit before thinking
+      this.scheduleAIThink(aiId, aiState);
+      return;
+    }
 
     // Get all words currently claimed in this game
     const existingWords = new Set<string>();
@@ -297,27 +311,206 @@ export class GameRoom extends Room<GameState> {
     }
     aiState.claimedWords.forEach(w => existingWords.add(w));
 
-    // Try to find a word
     const availableLetters = Array.from(this.state.availableLetters);
-    const word = this.aiService.findWord(
-      availableLetters,
-      aiState.player.difficulty,
-      existingWords
-    );
 
-    if (word) {
-      // Submit the word
-      const success = this.handleWordSubmission(aiId, word);
-      if (success) {
-        aiState.claimedWords.add(word);
+    // Maybe try to steal a word instead of making a new one
+    if (this.state.allWords.length > 0 && this.aiService.shouldAttemptSteal(aiState.player.difficulty)) {
+      const steal = this.findAIStealOpportunity(aiState.player.difficulty, existingWords);
+      if (steal) {
+        this.executeAISteal(aiId, aiState, steal);
+        this.scheduleAIThink(aiId, aiState);
+        return;
       }
+    }
+
+    // Try to find a word from pool (NON-BLOCKING - runs in worker thread!)
+    try {
+      const word = await this.aiService.findWordAsync(
+        availableLetters,
+        aiState.player.difficulty,
+        existingWords
+      );
+
+      // Check game state is still valid after async operation
+      if (this.state.phase !== 'playing') return;
+
+      if (word) {
+        const success = this.handleWordSubmission(aiId, word);
+        if (success) {
+          aiState.claimedWords.add(word);
+        }
+      }
+    } catch (err) {
+      this.warn(`AI think error: ${err}`);
     }
 
     // Schedule next think
     this.scheduleAIThink(aiId, aiState);
   }
 
+  /**
+   * Find a steal opportunity for the AI (simplified to avoid computation explosion)
+   */
+  private findAIStealOpportunity(
+    difficulty: AIDifficulty,
+    existingWords: Set<string>
+  ): { wordIds: string[]; newWord: string; poolLetters: Letter[] } | null {
+    if (!this.stealService || !this.dictionary) return null;
+
+    const allWords = Array.from(this.state.allWords);
+    const availableLetters = Array.from(this.state.availableLetters);
+
+    if (allWords.length === 0 || availableLetters.length === 0) return null;
+
+    // Pick a random word to try stealing (don't iterate all)
+    const targetWord = allWords[Math.floor(Math.random() * allWords.length)];
+    if (!targetWord) return null;
+    const wordLetters = Array.from(targetWord.letters).map(l => l.char);
+
+    // Try simple extensions: append 1-2 letters and check if it's a word
+    // This is much faster than the combinatorial approach
+    const extensions = [
+      // Single letter additions
+      ...availableLetters.map(l => ({ letters: [l], suffix: l.char })),
+    ];
+
+    // Shuffle to add variety
+    for (let i = extensions.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      const temp = extensions[i]!;
+      extensions[i] = extensions[j]!;
+      extensions[j] = temp;
+    }
+
+    // Only try a few extensions per think cycle
+    const maxTries = 5;
+    let tries = 0;
+
+    for (const ext of extensions) {
+      if (tries++ >= maxTries) break;
+
+      // Try appending
+      const appendWord = targetWord.word + ext.suffix;
+      if (this.dictionary.isValidWord(appendWord) && !existingWords.has(appendWord)) {
+        const result = this.stealService.validateSteal({
+          targetWords: [{ id: targetWord.id, word: targetWord.word, letters: Array.from(targetWord.letters) }],
+          newWord: appendWord,
+          availableLetters,
+        });
+        if (result.success) {
+          return { wordIds: [targetWord.id], newWord: appendWord, poolLetters: result.lettersFromPool! };
+        }
+      }
+
+      // Try prepending
+      const prependWord = ext.suffix + targetWord.word;
+      if (this.dictionary.isValidWord(prependWord) && !existingWords.has(prependWord)) {
+        const result = this.stealService.validateSteal({
+          targetWords: [{ id: targetWord.id, word: targetWord.word, letters: Array.from(targetWord.letters) }],
+          newWord: prependWord,
+          availableLetters,
+        });
+        if (result.success) {
+          return { wordIds: [targetWord.id], newWord: prependWord, poolLetters: result.lettersFromPool! };
+        }
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Execute a steal for an AI player
+   */
+  private executeAISteal(
+    aiId: string,
+    aiState: AIState,
+    steal: { wordIds: string[]; newWord: string; poolLetters: Letter[] }
+  ): void {
+    const player = this.state.players.get(aiId);
+    if (!player) return;
+
+    // Gather target words
+    const targetWords: Array<{ id: string; word: string; letters: Letter[]; ownerId: string; score: number }> = [];
+    for (const wordId of steal.wordIds) {
+      const word = this.state.allWords.find(w => w.id === wordId);
+      if (!word) return;
+      targetWords.push({
+        id: word.id,
+        word: word.word,
+        letters: Array.from(word.letters),
+        ownerId: word.ownerId,
+        score: word.score,
+      });
+    }
+
+    // Create the new word
+    const newWord = new Word();
+    newWord.id = nanoid(8);
+    newWord.word = steal.newWord.toUpperCase();
+    newWord.ownerId = aiId;
+    newWord.createdAt = Date.now();
+    newWord.stolenFrom = targetWords.map(t => t.ownerId).join(',');
+
+    // Add all letters and calculate score
+    let score = 0;
+    for (const target of targetWords) {
+      for (const letter of target.letters) {
+        newWord.letters.push(letter);
+        score += letter.value;
+      }
+    }
+    for (const letter of steal.poolLetters) {
+      newWord.letters.push(letter);
+      score += letter.value;
+      const idx = this.state.availableLetters.findIndex(l => l.id === letter.id);
+      if (idx !== -1) {
+        this.state.availableLetters.splice(idx, 1);
+      }
+    }
+    newWord.score = score;
+
+    // Remove stolen words from original owners
+    for (const target of targetWords) {
+      const wordIdx = this.state.allWords.findIndex(w => w.id === target.id);
+      if (wordIdx !== -1) {
+        this.state.allWords.splice(wordIdx, 1);
+      }
+
+      const owner = this.state.players.get(target.ownerId);
+      if (owner) {
+        const ownerWordIdx = owner.words.findIndex(w => w.id === target.id);
+        if (ownerWordIdx !== -1) {
+          owner.score -= owner.words[ownerWordIdx]!.score;
+          owner.words.splice(ownerWordIdx, 1);
+        }
+      }
+    }
+
+    // Add new word to AI player
+    player.words.push(newWord);
+    player.score += score;
+    this.state.allWords.push(newWord);
+    aiState.claimedWords.add(steal.newWord);
+
+    this.state.lastPoolActivity = Date.now();
+    this.scheduleLetterRefill();
+
+    const stolenWordsList = targetWords.map(t => t.word).join(' + ');
+    this.broadcast('wordStolen', {
+      stealerId: aiId,
+      stealerHandle: player.handle,
+      newWord: steal.newWord,
+      stolenWords: targetWords.map(t => ({ word: t.word, ownerId: t.ownerId, score: t.score })),
+      score,
+    });
+
+    this.log(`AI ${player.handle} swiped ${stolenWordsList} -> ${steal.newWord} for ${score} points`);
+  }
+
   private fillLetters() {
+    const beforeCount = this.state.availableLetters.length;
+
     // Add letters until we have LETTERS_PER_ROUND
     while (this.state.availableLetters.length < GAME_CONSTANTS.LETTERS_PER_ROUND) {
       // Use test letters first if available, otherwise random
@@ -332,6 +525,11 @@ export class GameRoom extends Room<GameState> {
       letter.isBlank = char === '*';
       letter.createdAt = Date.now();
       this.state.availableLetters.push(letter);
+    }
+
+    // If new letters were added, record the time (for AI fairness delay)
+    if (this.state.availableLetters.length > beforeCount) {
+      this.lastLetterRefillTime = Date.now();
     }
   }
 
@@ -371,6 +569,7 @@ export class GameRoom extends Room<GameState> {
     }
 
     const word = wordStr.toUpperCase().trim();
+    this.log(`${player.handle} trying: "${word}"`);
 
     // Validate word length
     if (word.length < GAME_CONSTANTS.MIN_WORD_LENGTH) {
@@ -411,10 +610,24 @@ export class GameRoom extends Room<GameState> {
   private findSwipeCombination(targetWord: string): { wordIds: string[]; poolLetters: Letter[] } | null {
     if (!this.stealService) return null;
 
-    const allWords = Array.from(this.state.allWords);
+    // Get letter counts for target word + pool (max available letters)
+    const poolLetters = Array.from(this.state.availableLetters);
+    const poolChars = poolLetters.map(l => l.isBlank ? '*' : l.char);
+    const targetCounts = this.getLetterCounts(targetWord);
+
+    // Pre-filter: only consider words whose letters are fully contained in target
+    const candidateWords = Array.from(this.state.allWords).filter(existingWord => {
+      const wordCounts = this.getLetterCounts(existingWord.word);
+      for (const [char, count] of Object.entries(wordCounts)) {
+        if ((targetCounts[char] || 0) < count) {
+          return false; // This word has letters not in target
+        }
+      }
+      return true;
+    });
 
     // Try single-word swipes first (most common)
-    for (const existingWord of allWords) {
+    for (const existingWord of candidateWords) {
       const result = this.stealService.validateSteal({
         targetWords: [{
           id: existingWord.id,
@@ -422,7 +635,7 @@ export class GameRoom extends Room<GameState> {
           letters: Array.from(existingWord.letters),
         }],
         newWord: targetWord,
-        availableLetters: Array.from(this.state.availableLetters),
+        availableLetters: poolLetters,
       });
 
       if (result.success) {
@@ -433,28 +646,42 @@ export class GameRoom extends Room<GameState> {
       }
     }
 
-    // Try two-word combinations
-    for (let i = 0; i < allWords.length; i++) {
-      for (let j = i + 1; j < allWords.length; j++) {
+    // Try two-word combinations (only from candidates)
+    for (let i = 0; i < candidateWords.length; i++) {
+      for (let j = i + 1; j < candidateWords.length; j++) {
+        const wordI = candidateWords[i]!;
+        const wordJ = candidateWords[j]!;
+
+        // Quick check: combined letters must fit in target
+        const combined = wordI.word + wordJ.word;
+        const combinedCounts = this.getLetterCounts(combined);
+        let fits = true;
+        for (const [char, count] of Object.entries(combinedCounts)) {
+          if ((targetCounts[char] || 0) < count) {
+            fits = false;
+            break;
+          }
+        }
+        if (!fits) continue;
+
         const result = this.stealService.validateSteal({
           targetWords: [
-            { id: allWords[i].id, word: allWords[i].word, letters: Array.from(allWords[i].letters) },
-            { id: allWords[j].id, word: allWords[j].word, letters: Array.from(allWords[j].letters) },
+            { id: wordI.id, word: wordI.word, letters: Array.from(wordI.letters) },
+            { id: wordJ.id, word: wordJ.word, letters: Array.from(wordJ.letters) },
           ],
           newWord: targetWord,
-          availableLetters: Array.from(this.state.availableLetters),
+          availableLetters: poolLetters,
         });
 
         if (result.success) {
           return {
-            wordIds: [allWords[i].id, allWords[j].id],
+            wordIds: [wordI.id, wordJ.id],
             poolLetters: result.lettersFromPool!,
           };
         }
       }
     }
 
-    // Could extend to 3+ word combinations but that's rare
     return null;
   }
 
@@ -552,7 +779,7 @@ export class GameRoom extends Room<GameState> {
       if (owner) {
         const ownerWordIdx = owner.words.findIndex(w => w.id === target.id);
         if (ownerWordIdx !== -1) {
-          owner.score -= owner.words[ownerWordIdx].score;
+          owner.score -= owner.words[ownerWordIdx]!.score;
           owner.words.splice(ownerWordIdx, 1);
         }
       }
@@ -771,7 +998,7 @@ export class GameRoom extends Room<GameState> {
       if (owner) {
         const ownerWordIdx = owner.words.findIndex(w => w.id === target.id);
         if (ownerWordIdx !== -1) {
-          const removedWord = owner.words[ownerWordIdx];
+          const removedWord = owner.words[ownerWordIdx]!;
           owner.score -= removedWord.score;
           owner.words.splice(ownerWordIdx, 1);
           affectedOwners.set(target.ownerId, (affectedOwners.get(target.ownerId) || 0) + removedWord.score);

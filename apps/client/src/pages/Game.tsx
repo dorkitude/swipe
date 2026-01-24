@@ -127,19 +127,26 @@ export function Game() {
           } catch (e) {
             // Room doesn't exist anymore, create new one
             console.log('Room not found, creating new one');
-            gameRoom = await client.joinOrCreate('game', {
+            gameRoom = await client.create('game', {
               odId: user.id,
               handle: user.handle,
               aiOpponents,
               testLetters: testLetters || undefined,
             });
           }
-        } else {
-          // Create or join new room
-          gameRoom = await client.joinOrCreate('game', {
+        } else if (aiOpponents && aiOpponents.length > 0) {
+          // AI games always get a fresh room
+          gameRoom = await client.create('game', {
             odId: user.id,
             handle: user.handle,
             aiOpponents,
+            testLetters: testLetters || undefined,
+          });
+        } else {
+          // Multiplayer: join or create shared room
+          gameRoom = await client.joinOrCreate('game', {
+            odId: user.id,
+            handle: user.handle,
             testLetters: testLetters || undefined,
           });
         }

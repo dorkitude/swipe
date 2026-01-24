@@ -1,5 +1,8 @@
 import { nanoid } from 'nanoid';
 import { readFile } from 'fs/promises';
+import { Worker } from 'worker_threads';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
 import type { DictionaryService } from './DictionaryService.js';
 import type { Letter } from '@swipe/shared';
 import { GAME_CONSTANTS } from '@swipe/shared';
@@ -7,15 +10,11 @@ import { GAME_CONSTANTS } from '@swipe/shared';
 export type AIDifficulty = 'easy' | 'medium' | 'hard';
 
 interface AIConfig {
-  // Reaction time range in ms
   minReactionTime: number;
   maxReactionTime: number;
-  // Word length preferences
   minWordLength: number;
   maxWordLength: number;
-  // Chance to find a word each "think" cycle (0-1)
   findChance: number;
-  // How often to attempt stealing (0-1)
   stealChance: number;
 }
 
@@ -59,15 +58,22 @@ export interface AIPlayer {
   isAI: true;
 }
 
+interface PendingRequest {
+  resolve: (word: string | null) => void;
+  reject: (err: Error) => void;
+}
+
 export class AIPlayerService {
   private dictionary: DictionaryService;
-  private wordCache: Map<string, string[]> = new Map();
+  private worker?: Worker;
+  private requestId = 0;
+  private pendingRequests: Map<number, PendingRequest> = new Map();
 
-  // Tiered word sets - AI can only use words from their difficulty level
-  private wordsByDifficulty: Record<AIDifficulty, Set<string>> = {
-    easy: new Set(),
-    medium: new Set(),
-    hard: new Set(),
+  // Vocabulary arrays to send to worker
+  private vocabularyByDifficulty: Record<AIDifficulty, string[]> = {
+    easy: [],
+    medium: [],
+    hard: [],
   };
   private loaded: boolean = false;
 
@@ -85,7 +91,6 @@ export class AIPlayerService {
     const start = Date.now();
 
     try {
-      // Load all three difficulty word lists
       const files: Record<AIDifficulty, string> = {
         easy: 'easy_words.txt',
         medium: 'medium_words.txt',
@@ -94,28 +99,71 @@ export class AIPlayerService {
 
       for (const [difficulty, filename] of Object.entries(files) as [AIDifficulty, string][]) {
         const content = await readFile(`${dataDir}/${filename}`, 'utf-8');
+        const words: string[] = [];
         for (const word of content.split(/\r?\n/)) {
           const cleaned = word.trim().toUpperCase();
           if (cleaned.length >= GAME_CONSTANTS.MIN_WORD_LENGTH) {
-            this.wordsByDifficulty[difficulty].add(cleaned);
+            words.push(cleaned);
           }
         }
+        this.vocabularyByDifficulty[difficulty] = words;
       }
 
       this.loaded = true;
       const elapsed = Date.now() - start;
-      console.log(`Loaded AI word lists in ${elapsed}ms: easy=${this.wordsByDifficulty.easy.size}, medium=${this.wordsByDifficulty.medium.size}, hard=${this.wordsByDifficulty.hard.size}`);
+      console.log(`Loaded AI word lists in ${elapsed}ms: easy=${this.vocabularyByDifficulty.easy.length}, medium=${this.vocabularyByDifficulty.medium.length}, hard=${this.vocabularyByDifficulty.hard.length}`);
+
+      // Start the worker thread
+      this.startWorker();
     } catch (error) {
       console.error('Failed to load AI word lists:', error);
       throw error;
     }
   }
 
-  /**
-   * Check if a word is in the AI's vocabulary for a given difficulty
-   */
-  private isInVocabulary(word: string, difficulty: AIDifficulty): boolean {
-    return this.wordsByDifficulty[difficulty].has(word);
+  private startWorker(): void {
+    try {
+      // Get the path to the worker
+      const __filename = fileURLToPath(import.meta.url);
+      const __dirname = dirname(__filename);
+
+      // Try compiled .js first (works in both prod and dev with tsx)
+      const workerPath = join(__dirname, 'aiWorker.js');
+
+      this.worker = new Worker(workerPath);
+
+      this.worker.on('message', (msg: { type: string; id: number; word: string | null }) => {
+        if (msg.type === 'wordFound') {
+          const pending = this.pendingRequests.get(msg.id);
+          if (pending) {
+            pending.resolve(msg.word);
+            this.pendingRequests.delete(msg.id);
+          }
+        }
+      });
+
+      this.worker.on('error', (err) => {
+        console.error('AI Worker error:', err);
+        this.worker = undefined; // Disable worker, fall back to sync
+        // Reject all pending requests
+        for (const pending of this.pendingRequests.values()) {
+          pending.reject(err);
+        }
+        this.pendingRequests.clear();
+      });
+
+      this.worker.on('exit', (code) => {
+        if (code !== 0) {
+          console.error(`AI Worker exited with code ${code}`);
+          this.worker = undefined; // Disable worker
+        }
+      });
+
+      console.log('AI Worker thread started');
+    } catch (err) {
+      console.warn('AI Worker not available, using sync mode:', (err as Error).message);
+      this.worker = undefined;
+    }
   }
 
   createAIPlayer(difficulty: AIDifficulty): AIPlayer {
@@ -136,142 +184,139 @@ export class AIPlayerService {
   }
 
   /**
-   * Find a word the AI can make from available letters
+   * Find a word the AI can make - runs in worker thread (non-blocking!)
+   */
+  async findWordAsync(
+    availableLetters: Letter[],
+    difficulty: AIDifficulty,
+    existingWords: Set<string> = new Set()
+  ): Promise<string | null> {
+    if (!this.worker) {
+      // Fallback to sync if worker not available
+      return this.findWordSync(availableLetters, difficulty, existingWords);
+    }
+
+    const config = DIFFICULTY_CONFIGS[difficulty];
+    const id = ++this.requestId;
+
+    return new Promise((resolve, reject) => {
+      // Set timeout to prevent hanging
+      const timeout = setTimeout(() => {
+        this.pendingRequests.delete(id);
+        resolve(null); // Just return null on timeout, don't crash
+      }, 5000);
+
+      this.pendingRequests.set(id, {
+        resolve: (word) => {
+          clearTimeout(timeout);
+          resolve(word);
+        },
+        reject: (err) => {
+          clearTimeout(timeout);
+          reject(err);
+        },
+      });
+
+      this.worker!.postMessage({
+        type: 'findWord',
+        id,
+        letters: availableLetters.map(l => l.isBlank ? '*' : l.char),
+        difficulty,
+        existingWords: Array.from(existingWords),
+        vocabulary: this.vocabularyByDifficulty[difficulty],
+        config: {
+          minWordLength: config.minWordLength,
+          maxWordLength: config.maxWordLength,
+          findChance: config.findChance,
+        },
+      });
+    });
+  }
+
+  /**
+   * Synchronous fallback (old method) - only used if worker fails
+   */
+  private findWordSync(
+    availableLetters: Letter[],
+    difficulty: AIDifficulty,
+    existingWords: Set<string> = new Set()
+  ): string | null {
+    const config = DIFFICULTY_CONFIGS[difficulty];
+    const vocabSet = new Set(this.vocabularyByDifficulty[difficulty]);
+
+    if (Math.random() > config.findChance) {
+      return null;
+    }
+
+    const letterCounts: Record<string, number> = {};
+    for (const l of availableLetters) {
+      const char = l.isBlank ? '*' : l.char;
+      if (char !== '*') {
+        letterCounts[char] = (letterCounts[char] || 0) + 1;
+      }
+    }
+
+    const results: string[] = [];
+    let calls = 0;
+    const maxCalls = 3000;
+
+    const generate = (available: Record<string, number>, current: string) => {
+      if (++calls > maxCalls || results.length >= 10) return;
+      if (current.length > config.maxWordLength) return;
+
+      if (current.length >= config.minWordLength) {
+        if (vocabSet.has(current) && !existingWords.has(current) && !results.includes(current)) {
+          results.push(current);
+        }
+      }
+
+      for (const [letter, count] of Object.entries(available)) {
+        if (count > 0) {
+          available[letter] = count - 1;
+          generate(available, current + letter);
+          available[letter] = count;
+        }
+      }
+    };
+
+    generate({ ...letterCounts }, '');
+
+    if (results.length === 0) return null;
+    return results[Math.floor(Math.random() * results.length)] ?? null;
+  }
+
+  /**
+   * Legacy sync method - prefer findWordAsync
    */
   findWord(
     availableLetters: Letter[],
     difficulty: AIDifficulty,
     existingWords: Set<string> = new Set()
   ): string | null {
-    const config = DIFFICULTY_CONFIGS[difficulty];
-
-    // Random chance to "fail" finding a word (simulates human imperfection)
-    if (Math.random() > config.findChance) {
-      return null;
-    }
-
-    // Get letter characters (handle blanks as wildcards)
-    const letterChars = availableLetters.map(l => l.isBlank ? '*' : l.char);
-    const cacheKey = `${difficulty}:${letterChars.sort().join('')}`;
-
-    // Check cache first
-    let possibleWords = this.wordCache.get(cacheKey);
-    if (!possibleWords) {
-      possibleWords = this.findAllPossibleWords(letterChars, difficulty);
-      this.wordCache.set(cacheKey, possibleWords);
-
-      // Limit cache size
-      if (this.wordCache.size > 1000) {
-        const firstKey = this.wordCache.keys().next().value;
-        if (firstKey) this.wordCache.delete(firstKey);
-      }
-    }
-
-    // Filter by difficulty constraints and existing words
-    const validWords = possibleWords.filter(word => {
-      if (existingWords.has(word)) return false;
-      if (word.length < config.minWordLength) return false;
-      if (word.length > config.maxWordLength) return false;
-      return true;
-    });
-
-    if (validWords.length === 0) return null;
-
-    // Weighted random selection - prefer longer words for harder difficulties
-    if (difficulty === 'hard') {
-      // Sort by length descending, pick from top third
-      validWords.sort((a, b) => b.length - a.length);
-      const topThird = Math.max(1, Math.floor(validWords.length / 3));
-      return validWords[Math.floor(Math.random() * topThird)] ?? null;
-    } else if (difficulty === 'medium') {
-      // Random from all valid
-      return validWords[Math.floor(Math.random() * validWords.length)] ?? null;
-    } else {
-      // Easy: prefer shorter words
-      validWords.sort((a, b) => a.length - b.length);
-      const bottomHalf = Math.max(1, Math.floor(validWords.length / 2));
-      return validWords[Math.floor(Math.random() * bottomHalf)] ?? null;
-    }
+    return this.findWordSync(availableLetters, difficulty, existingWords);
   }
 
-  /**
-   * Find all valid words that can be made from given letters
-   */
-  private findAllPossibleWords(letters: string[], difficulty: AIDifficulty): string[] {
-    const results: string[] = [];
-    const letterCounts = this.getLetterCounts(letters);
-    const blankCount = letterCounts['*'] || 0;
-    delete letterCounts['*'];
-
-    // Generate all permutations and check against difficulty-appropriate vocabulary
-    this.generateWords(letterCounts, blankCount, '', results, difficulty);
-
-    return results;
-  }
-
-  private generateWords(
-    available: Record<string, number>,
-    blanks: number,
-    current: string,
-    results: string[],
-    difficulty: AIDifficulty,
-    maxLength: number = 10
-  ): void {
-    // Check if current is a valid word in AI's vocabulary
-    if (current.length >= GAME_CONSTANTS.MIN_WORD_LENGTH) {
-      if (this.isInVocabulary(current, difficulty) && !results.includes(current)) {
-        results.push(current);
-      }
-    }
-
-    // Stop if too long or too many results
-    if (current.length >= maxLength || results.length >= 100) {
-      return;
-    }
-
-    // Try adding each available letter
-    for (const [letter, count] of Object.entries(available)) {
-      if (count > 0) {
-        available[letter] = count - 1;
-        this.generateWords(available, blanks, current + letter, results, difficulty, maxLength);
-        available[letter] = count;
-      }
-    }
-
-    // Try using a blank as each letter A-Z
-    if (blanks > 0) {
-      for (let i = 65; i <= 90; i++) {
-        const letter = String.fromCharCode(i);
-        this.generateWords(available, blanks - 1, current + letter, results, difficulty, maxLength);
-      }
-    }
-  }
-
-  private getLetterCounts(letters: string[]): Record<string, number> {
-    const counts: Record<string, number> = {};
-    for (const letter of letters) {
-      counts[letter] = (counts[letter] || 0) + 1;
-    }
-    return counts;
-  }
-
-  /**
-   * Get random reaction time for AI based on difficulty
-   */
   getReactionTime(difficulty: AIDifficulty): number {
     const config = DIFFICULTY_CONFIGS[difficulty];
     return config.minReactionTime +
       Math.random() * (config.maxReactionTime - config.minReactionTime);
   }
 
-  /**
-   * Check if AI should attempt to steal this turn
-   */
   shouldAttemptSteal(difficulty: AIDifficulty): boolean {
     return Math.random() < DIFFICULTY_CONFIGS[difficulty].stealChance;
   }
 
   get isLoaded(): boolean {
     return this.loaded;
+  }
+
+  /**
+   * Clean up worker on shutdown
+   */
+  async terminate(): Promise<void> {
+    if (this.worker) {
+      await this.worker.terminate();
+      this.worker = undefined;
+    }
   }
 }
