@@ -380,7 +380,7 @@
 /* Feedback messages */
 .feedbackContainer {
   position: fixed;
-  bottom: 100px;
+  top: 35%;
   left: 50%;
   transform: translateX(-50%);
   display: flex;
