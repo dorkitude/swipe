@@ -116,3 +116,50 @@
   color: var(--text-muted);
   font-style: italic;
 }
+
+.multiplayerOptions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+
+.divider {
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+.joinForm {
+  display: flex;
+  gap: 8px;
+}
+
+.codeInput {
+  width: 120px;
+  padding: 12px 16px;
+  text-align: center;
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: 3px;
+  text-transform: uppercase;
+  background: var(--bg-secondary);
+  border: 2px solid var(--bg-tertiary);
+  border-radius: 8px;
+  color: var(--text-primary);
+}
+
+.codeInput:focus {
+  outline: none;
+  border-color: var(--accent-primary);
+}
+
+.codeInput::placeholder {
+  color: var(--text-muted);
+  letter-spacing: 3px;
+}
+
+.error {
+  color: var(--accent-danger);
+  font-size: 14px;
+  margin: 0;
+}

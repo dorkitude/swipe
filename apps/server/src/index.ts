@@ -13,6 +13,7 @@ import { LobbyRoom } from './rooms/LobbyRoom.js';
 import { GameRoom } from './rooms/GameRoom.js';
 import { dictionaryService } from './services/DictionaryService.js';
 import { AIPlayerService } from './services/AIPlayerService.js';
+import { roomCodeRegistry } from './services/RoomCodeRegistry.js';
 import './config/auth.js'; // Initialize passport strategies
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -131,6 +132,18 @@ async function main() {
   // Define rooms
   gameServer.define('lobby', LobbyRoom);
   gameServer.define('game', GameRoom, { dictionary: dictionaryService, aiService });
+
+  // Room code lookup API - find room by shareable code
+  app.get('/api/rooms/:code', (req, res) => {
+    const code = req.params.code.toUpperCase();
+    const roomId = roomCodeRegistry.getRoomId(code);
+
+    if (roomId) {
+      res.json({ roomId });
+    } else {
+      res.status(404).json({ error: 'Room not found' });
+    }
+  });
 
   // Start server
   httpServer.listen(env.port, () => {

@@ -4,6 +4,7 @@ import { nanoid } from 'nanoid';
 import type { DictionaryService } from '../services/DictionaryService.js';
 import { AIPlayerService, type AIDifficulty, type AIPlayer } from '../services/AIPlayerService.js';
 import { WordStealService } from '../services/WordStealService.js';
+import { roomCodeRegistry } from '../services/RoomCodeRegistry.js';
 import { env } from '../config/environment.js';
 
 interface JoinOptions {
@@ -51,6 +52,7 @@ export class GameRoom extends Room<GameState> {
   override onCreate(options: { dictionary?: DictionaryService; aiService?: AIPlayerService }) {
     this.setState(new GameState());
     this.state.roomName = this.generateRoomName();
+    this.state.roomCode = this.generateRoomCode();
     this.letterPool = buildLetterPool();
     this.dictionary = options.dictionary;
     this.aiService = options.aiService;
@@ -60,7 +62,10 @@ export class GameRoom extends Room<GameState> {
       this.stealService = new WordStealService(this.dictionary);
     }
 
-    this.log('Room created');
+    // Register room code for lookup API
+    roomCodeRegistry.register(this.state.roomCode, this.roomId);
+
+    this.log(`Room created (code: ${this.state.roomCode})`);
 
     // Handle word submissions - auto-detects pool vs swipe
     this.onMessage('makeWord', (client, message: { word: string }) => {
@@ -1028,6 +1033,16 @@ export class GameRoom extends Room<GameState> {
     this.log(`${player.handle} stole ${stolenWordsList} -> ${newWord.word} for ${newWord.score} points`);
   }
 
+  private generateRoomCode(): string {
+    // 6-char alphanumeric, avoiding confusing chars (0/O, 1/I/L)
+    const chars = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+    let code = '';
+    for (let i = 0; i < 6; i++) {
+      code += chars[Math.floor(Math.random() * chars.length)];
+    }
+    return code;
+  }
+
   private generateRoomName(): string {
     const adjectives = [
       'Cosmic', 'Neon', 'Velvet', 'Crystal', 'Thunder', 'Mystic', 'Golden', 'Silver',
@@ -1053,6 +1068,7 @@ export class GameRoom extends Room<GameState> {
     }
     this.stopAIThinking();
     this.aiStates.clear();
+    roomCodeRegistry.unregister(this.roomId);
     this.log('Room disposed');
   }
 }

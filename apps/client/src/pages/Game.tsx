@@ -10,6 +10,7 @@ type AIDifficulty = 'easy' | 'medium' | 'hard';
 
 interface LocationState {
   aiOpponents?: Array<{ difficulty: AIDifficulty }>;
+  createPrivate?: boolean;
 }
 
 interface Letter {
@@ -69,6 +70,7 @@ export function Game() {
   const [room, setRoom] = useState<Room | null>(null);
   const [phase, setPhase] = useState<string>('connecting');
   const [roomName, setRoomName] = useState<string>('');
+  const [roomCode, setRoomCode] = useState<string>('');
   const [letters, setLetters] = useState<Letter[]>([]);
   const [players, setPlayers] = useState<Map<string, Player>>(new Map());
   const [wordInput, setWordInput] = useState('');
@@ -142,6 +144,13 @@ export function Game() {
             aiOpponents,
             testLetters: testLetters || undefined,
           });
+        } else if (state?.createPrivate) {
+          // Create a private room (for multiplayer with room code)
+          gameRoom = await client.create('game', {
+            odId: user.id,
+            handle: user.handle,
+            testLetters: testLetters || undefined,
+          });
         } else {
           // Multiplayer: join or create shared room
           gameRoom = await client.joinOrCreate('game', {
@@ -172,9 +181,12 @@ export function Game() {
             setPhase(state.phase);
           }
 
-          // Update room name
+          // Update room name and code
           if (state.roomName) {
             setRoomName(state.roomName);
+          }
+          if (state.roomCode) {
+            setRoomCode(state.roomCode);
           }
 
           // Sync letters from state
@@ -353,7 +365,25 @@ export function Game() {
           </button>
         </div>
         <h1 className={styles.logo}>SWIPE</h1>
-        <div className={styles.roomNameHeader}>{roomName}</div>
+        <div className={styles.roomInfo}>
+          <div className={styles.roomNameHeader}>{roomName}</div>
+          {roomCode && (
+            <div className={styles.roomCode}>
+              <span className={styles.codeLabel}>Code:</span>
+              <span className={styles.codeValue}>{roomCode}</span>
+              <button
+                className={styles.copyBtn}
+                onClick={() => {
+                  navigator.clipboard.writeText(roomCode);
+                  showFeedback('Code copied!', 'var(--accent-primary)');
+                }}
+                title="Copy room code"
+              >
+                📋
+              </button>
+            </div>
+          )}
+        </div>
       </header>
 
       {phase !== 'playing' && (
