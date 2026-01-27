@@ -272,9 +272,13 @@ export function Game() {
         });
 
         gameRoom.onMessage('wordStolen', (data: any) => {
-          // Get unique owner handles
-          const ownerHandles = [...new Set(data.stolenWords.map((w: any) => w.ownerHandle))].join(' & ');
-          showFeedback(`${data.stealerHandle} swiped from ${ownerHandles}!`, 'var(--accent-swipe)');
+          // Get unique owner handles - check for self-swipe
+          const uniqueOwners = [...new Set(data.stolenWords.map((w: any) => w.ownerHandle))] as string[];
+          const isSelfSwipe = uniqueOwners.length === 1 && uniqueOwners[0] === data.stealerHandle;
+          const feedbackMsg = isSelfSwipe
+            ? `${data.stealerHandle} expanded!`
+            : `${data.stealerHandle} swiped from ${uniqueOwners.join(' & ')}!`;
+          showFeedback(feedbackMsg, 'var(--accent-swipe)');
           // Add to move log
           setMoveLog((prev) => [...prev, {
             id: ++moveLogIdRef.current,
@@ -506,11 +510,18 @@ export function Game() {
                         {isSwiped && (
                           <div className={styles.swipeTooltip}>
                             <div className={styles.tooltipTitle}>Swipe History</div>
-                            {showFirst2.map((entry, i) => (
-                              <div key={i} className={styles.tooltipEntry}>
-                                <strong>{entry.toHandle}</strong> swiped <strong>{entry.fromWord}</strong> from <strong>{entry.fromHandle}</strong>
-                              </div>
-                            ))}
+                            {showFirst2.map((entry, i) => {
+                              const isSelfExpand = entry.toHandle === entry.fromHandle;
+                              return (
+                                <div key={i} className={styles.tooltipEntry}>
+                                  {isSelfExpand ? (
+                                    <><strong>{entry.toHandle}</strong> expanded <strong>{entry.fromWord}</strong></>
+                                  ) : (
+                                    <><strong>{entry.toHandle}</strong> swiped <strong>{entry.fromWord}</strong> from <strong>{entry.fromHandle}</strong></>
+                                  )}
+                                </div>
+                              );
+                            })}
                             {moreCount > 0 && (
                               <div className={styles.tooltipMore}>
                                 ...and {moreCount} more swipe{moreCount > 1 ? 's' : ''} before
@@ -532,10 +543,11 @@ export function Game() {
           <h3 className={styles.logTitle}>Move Log</h3>
           <div className={styles.logEntries}>
             {moveLog.slice().reverse().map((entry) => {
-              // Get unique owner handles for swipe entries
-              const ownerHandles = entry.stolenWords
-                ? [...new Set(entry.stolenWords.map(w => w.ownerHandle).filter(Boolean))].join(' & ')
-                : '';
+              // Get unique owner handles for swipe entries - check for self-swipe
+              const uniqueOwners = entry.stolenWords
+                ? [...new Set(entry.stolenWords.map(w => w.ownerHandle).filter(Boolean))]
+                : [];
+              const isSelfSwipe = uniqueOwners.length === 1 && uniqueOwners[0] === entry.handle;
 
               return (
                 <div
@@ -543,10 +555,13 @@ export function Game() {
                   className={`${styles.logEntry} ${entry.type === 'swipe' ? styles.swipeEntry : ''} ${entry.isAI ? styles.aiEntry : ''}`}
                 >
                   <span className={styles.logHandle}>{entry.handle}</span>
-                  {entry.type === 'swipe' && ownerHandles && (
+                  {entry.type === 'swipe' && !isSelfSwipe && uniqueOwners.length > 0 && (
                     <span className={styles.logSwipeFrom}>
-                      swiped from <span className={styles.fromPlayer}>{ownerHandles}</span>:
+                      swiped from <span className={styles.fromPlayer}>{uniqueOwners.join(' & ')}</span>:
                     </span>
+                  )}
+                  {entry.type === 'swipe' && isSelfSwipe && (
+                    <span className={styles.logSwipeFrom}>expanded:</span>
                   )}
                   {entry.type === 'swipe' && entry.stolenWords && (
                     <span className={styles.logSwipeFrom}>
@@ -555,7 +570,7 @@ export function Game() {
                   )}
                   <span className={styles.logWord}>{entry.word}</span>
                   <span className={styles.logScore}>+{entry.score}</span>
-                  {entry.type === 'swipe' && entry.stolenWords && (
+                  {entry.type === 'swipe' && entry.stolenWords && !isSelfSwipe && (
                     <span className={styles.logLostScore}>
                       −{entry.stolenWords.reduce((sum, w) => sum + w.score, 0)}
                     </span>
