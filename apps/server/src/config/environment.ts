@@ -29,7 +29,7 @@ export function validateEnv(): void {
 
   if (env.nodeEnv === 'production') {
     if (!env.googleClientId || !env.googleClientSecret) {
-      throw new Error('Google OAuth credentials are required in production');
+      console.warn('Warning: Google OAuth credentials not set. OAuth login will be disabled.');
     }
     if (env.sessionSecret === 'dev-secret-change-in-production') {
       throw new Error('SESSION_SECRET must be set in production');

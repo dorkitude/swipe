@@ -1,0 +1,48 @@
+version: '3.7'
+
+services:
+  swipe:
+    build: .
+    container_name: swipe
+    restart: unless-stopped
+    depends_on:
+      - swipe-db
+    environment:
+      - NODE_ENV=production
+      - PORT=2567
+      - DATABASE_URL=postgresql://swipe:${POSTGRES_PASSWORD}@swipe-db:5432/swipe
+      - SESSION_SECRET=${SESSION_SECRET}
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
+      - GOOGLE_CALLBACK_URL=https://swipe.dorkitude.com/auth/google/callback
+      - CLIENT_URL=https://swipe.dorkitude.com
+      # nginx-proxy configuration
+      - VIRTUAL_HOST=swipe.dorkitude.com
+      - VIRTUAL_PORT=2567
+      - LETSENCRYPT_HOST=swipe.dorkitude.com
+      - LETSENCRYPT_EMAIL=admin@webization.com
+    networks:
+      - proxy-network
+      - swipe-internal
+
+  swipe-db:
+    image: postgres:16-alpine
+    container_name: swipe-db
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=swipe
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=swipe
+    volumes:
+      - swipe-postgres-data:/var/lib/postgresql/data
+    networks:
+      - swipe-internal
+
+networks:
+  proxy-network:
+    external: true
+  swipe-internal:
+    driver: bridge
+
+volumes:
+  swipe-postgres-data:

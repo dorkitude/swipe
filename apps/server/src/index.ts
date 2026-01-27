@@ -6,6 +6,7 @@ import { Server } from 'colyseus';
 import { WebSocketTransport } from '@colyseus/ws-transport';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { existsSync } from 'fs';
 
 import { env, validateEnv } from './config/environment.js';
 import { LobbyRoom } from './rooms/LobbyRoom.js';
@@ -84,6 +85,21 @@ async function main() {
       res.json({ success: true });
     });
   });
+
+  // Serve static client files in production
+  const clientDistPath = join(__dirname, '../../client/dist');
+  if (env.nodeEnv === 'production' && existsSync(clientDistPath)) {
+    console.log(`Serving static files from ${clientDistPath}`);
+    app.use(express.static(clientDistPath));
+    // Handle SPA routing - serve index.html for all non-API routes
+    app.get('*', (req, res, next) => {
+      // Skip API and auth routes
+      if (req.path.startsWith('/api') || req.path.startsWith('/auth') || req.path.startsWith('/health')) {
+        return next();
+      }
+      res.sendFile(join(clientDistPath, 'index.html'));
+    });
+  }
 
   // Create HTTP server
   const httpServer = createServer(app);

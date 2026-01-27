@@ -32,11 +32,11 @@ export class ErrorBoundary extends Component<Props, State> {
     return { hasError: true, error };
   }
 
-  componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+  override componentDidCatch(error: Error, errorInfo: ErrorInfo) {
     reportError(error, `ReactErrorBoundary\n${errorInfo.componentStack || ''}`);
   }
 
-  render() {
+  override render() {
     if (this.state.hasError) {
       return (
         <div style={{
