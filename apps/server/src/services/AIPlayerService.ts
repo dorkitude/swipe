@@ -127,10 +127,18 @@ export class AIPlayerService {
       const __filename = fileURLToPath(import.meta.url);
       const __dirname = dirname(__filename);
 
-      // Try compiled .js first (works in both prod and dev with tsx)
-      const workerPath = join(__dirname, 'aiWorker.js');
+      // In dev (tsx), use .ts file with tsx loader; in prod use compiled .js
+      const isDev = process.env.NODE_ENV !== 'production';
+      const workerPath = isDev
+        ? join(__dirname, 'aiWorker.ts')
+        : join(__dirname, 'aiWorker.js');
 
-      this.worker = new Worker(workerPath);
+      // Use tsx loader for TypeScript workers in development
+      const workerOptions = isDev
+        ? { execArgv: ['--import', 'tsx'] }
+        : {};
+
+      this.worker = new Worker(workerPath, workerOptions);
 
       this.worker.on('message', (msg: { type: string; id: number; word: string | null }) => {
         if (msg.type === 'wordFound') {
