@@ -21,11 +21,20 @@ interface Letter {
   createdAt: number;
 }
 
+interface SwipeHistoryEntry {
+  fromHandle: string;
+  fromWord: string;
+  toHandle: string;
+  timestamp: number;
+}
+
 interface Word {
   id: string;
   word: string;
   score: number;
   ownerId: string;
+  stolenFromHandle?: string;
+  swipeHistory?: SwipeHistoryEntry[];
 }
 
 interface Player {
@@ -44,6 +53,7 @@ interface FeedbackMessage {
 interface StolenWordInfo {
   word: string;
   score: number;
+  ownerHandle?: string;
 }
 
 interface MoveLogEntry {
@@ -217,6 +227,13 @@ export function Game() {
                   word: w.word,
                   score: w.score,
                   ownerId: w.ownerId,
+                  stolenFromHandle: w.stolenFromHandle || undefined,
+                  swipeHistory: w.swipeHistory ? Array.from(w.swipeHistory).map((h: any) => ({
+                    fromHandle: h.fromHandle,
+                    fromWord: h.fromWord,
+                    toHandle: h.toHandle,
+                    timestamp: h.timestamp,
+                  })) : undefined,
                 })),
               });
             });
@@ -255,8 +272,9 @@ export function Game() {
         });
 
         gameRoom.onMessage('wordStolen', (data: any) => {
-          const stolenList = data.stolenWords.map((w: any) => w.word).join(' + ');
-          showFeedback(`${data.stealerHandle} swiped ${stolenList} → ${data.newWord}! 🔥`, 'var(--accent-warning)');
+          // Get unique owner handles
+          const ownerHandles = [...new Set(data.stolenWords.map((w: any) => w.ownerHandle))].join(' & ');
+          showFeedback(`${data.stealerHandle} swiped from ${ownerHandles}!`, 'var(--accent-swipe)');
           // Add to move log
           setMoveLog((prev) => [...prev, {
             id: ++moveLogIdRef.current,
@@ -266,7 +284,7 @@ export function Game() {
             word: data.newWord,
             score: data.score,
             isAI: data.stealerHandle.includes('Bot'),
-            stolenWords: data.stolenWords.map((w: any) => ({ word: w.word, score: w.score })),
+            stolenWords: data.stolenWords.map((w: any) => ({ word: w.word, score: w.score, ownerHandle: w.ownerHandle })),
           }]);
         });
 
@@ -466,18 +484,43 @@ export function Game() {
                   <span className={styles.playerScore}>{player.score} pts</span>
                 </div>
                 <div className={styles.wordsList}>
-                  {player.words.slice().reverse().map((word) => (
-                    <div key={word.id} className={styles.wordWithTiles}>
-                      <div className={styles.wordTiles}>
-                        {word.word.split('').map((char, i) => (
-                          <div key={i} className={styles.miniTile}>
-                            <span className={styles.miniChar}>{char}</span>
+                  {player.words.slice().reverse().map((word) => {
+                    const isSwiped = word.swipeHistory && word.swipeHistory.length > 0;
+                    const history = word.swipeHistory || [];
+                    const showFirst2 = history.slice(-2).reverse(); // Most recent 2
+                    const moreCount = history.length > 2 ? history.length - 2 : 0;
+
+                    return (
+                      <div
+                        key={word.id}
+                        className={`${styles.wordWithTiles} ${isSwiped ? styles.swiped : ''}`}
+                      >
+                        <div className={styles.wordTiles}>
+                          {word.word.split('').map((char, i) => (
+                            <div key={i} className={styles.miniTile}>
+                              <span className={styles.miniChar}>{char}</span>
+                            </div>
+                          ))}
+                        </div>
+                        <span className={styles.wordScore}>+{word.score}</span>
+                        {isSwiped && (
+                          <div className={styles.swipeTooltip}>
+                            <div className={styles.tooltipTitle}>Swipe History</div>
+                            {showFirst2.map((entry, i) => (
+                              <div key={i} className={styles.tooltipEntry}>
+                                <strong>{entry.toHandle}</strong> swiped <strong>{entry.fromWord}</strong> from <strong>{entry.fromHandle}</strong>
+                              </div>
+                            ))}
+                            {moreCount > 0 && (
+                              <div className={styles.tooltipMore}>
+                                ...and {moreCount} more swipe{moreCount > 1 ? 's' : ''} before
+                              </div>
+                            )}
                           </div>
-                        ))}
+                        )}
                       </div>
-                      <span className={styles.wordScore}>+{word.score}</span>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             ))}
@@ -488,26 +531,38 @@ export function Game() {
         <aside className={styles.moveLog} ref={moveLogRef}>
           <h3 className={styles.logTitle}>Move Log</h3>
           <div className={styles.logEntries}>
-            {moveLog.slice().reverse().map((entry) => (
-              <div
-                key={entry.id}
-                className={`${styles.logEntry} ${entry.type === 'swipe' ? styles.swipeEntry : ''} ${entry.isAI ? styles.aiEntry : ''}`}
-              >
-                <span className={styles.logHandle}>{entry.handle}</span>
-                {entry.type === 'swipe' && entry.stolenWords && (
-                  <span className={styles.logSwipeFrom}>
-                    {entry.stolenWords.map(w => w.word).join(' + ')} →
-                  </span>
-                )}
-                <span className={styles.logWord}>{entry.word}</span>
-                <span className={styles.logScore}>+{entry.score}</span>
-                {entry.type === 'swipe' && entry.stolenWords && (
-                  <span className={styles.logLostScore}>
-                    −{entry.stolenWords.reduce((sum, w) => sum + w.score, 0)}
-                  </span>
-                )}
-              </div>
-            ))}
+            {moveLog.slice().reverse().map((entry) => {
+              // Get unique owner handles for swipe entries
+              const ownerHandles = entry.stolenWords
+                ? [...new Set(entry.stolenWords.map(w => w.ownerHandle).filter(Boolean))].join(' & ')
+                : '';
+
+              return (
+                <div
+                  key={entry.id}
+                  className={`${styles.logEntry} ${entry.type === 'swipe' ? styles.swipeEntry : ''} ${entry.isAI ? styles.aiEntry : ''}`}
+                >
+                  <span className={styles.logHandle}>{entry.handle}</span>
+                  {entry.type === 'swipe' && ownerHandles && (
+                    <span className={styles.logSwipeFrom}>
+                      swiped from <span className={styles.fromPlayer}>{ownerHandles}</span>:
+                    </span>
+                  )}
+                  {entry.type === 'swipe' && entry.stolenWords && (
+                    <span className={styles.logSwipeFrom}>
+                      {entry.stolenWords.map(w => w.word).join(' + ')} →
+                    </span>
+                  )}
+                  <span className={styles.logWord}>{entry.word}</span>
+                  <span className={styles.logScore}>+{entry.score}</span>
+                  {entry.type === 'swipe' && entry.stolenWords && (
+                    <span className={styles.logLostScore}>
+                      −{entry.stolenWords.reduce((sum, w) => sum + w.score, 0)}
+                    </span>
+                  )}
+                </div>
+              );
+            })}
             {moveLog.length === 0 && (
               <p className={styles.logEmpty}>No moves yet...</p>
             )}

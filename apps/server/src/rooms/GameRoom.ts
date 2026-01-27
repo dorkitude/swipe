@@ -1,5 +1,5 @@
 import { Room, Client } from 'colyseus';
-import { GameState, Player, Letter, Word, GAME_CONSTANTS, LETTER_VALUES, buildLetterPool } from '@swipe/shared';
+import { GameState, Player, Letter, Word, SwipeHistoryEntry, GAME_CONSTANTS, LETTER_VALUES, buildLetterPool } from '@swipe/shared';
 import { nanoid } from 'nanoid';
 import type { DictionaryService } from '../services/DictionaryService.js';
 import { AIPlayerService, type AIDifficulty, type AIPlayer } from '../services/AIPlayerService.js';
@@ -435,17 +435,20 @@ export class GameRoom extends Room<GameState> {
     const player = this.state.players.get(aiId);
     if (!player) return;
 
-    // Gather target words
-    const targetWords: Array<{ id: string; word: string; letters: Letter[]; ownerId: string; score: number }> = [];
+    // Gather target words with swipe history
+    const targetWords: Array<{ id: string; word: string; letters: Letter[]; ownerId: string; ownerHandle: string; score: number; swipeHistory: SwipeHistoryEntry[] }> = [];
     for (const wordId of steal.wordIds) {
       const word = this.state.allWords.find(w => w.id === wordId);
       if (!word) return;
+      const ownerPlayer = this.state.players.get(word.ownerId);
       targetWords.push({
         id: word.id,
         word: word.word,
         letters: Array.from(word.letters),
         ownerId: word.ownerId,
+        ownerHandle: ownerPlayer?.handle || 'Unknown',
         score: word.score,
+        swipeHistory: Array.from(word.swipeHistory || []),
       });
     }
 
@@ -456,6 +459,20 @@ export class GameRoom extends Room<GameState> {
     newWord.ownerId = aiId;
     newWord.createdAt = Date.now();
     newWord.stolenFrom = targetWords.map(t => t.ownerId).join(',');
+    newWord.stolenFromHandle = targetWords.map(t => t.ownerHandle).join(', ');
+
+    // Build swipe history - inherit from stolen words and add this swipe
+    for (const target of targetWords) {
+      for (const historyEntry of target.swipeHistory) {
+        newWord.swipeHistory.push(historyEntry);
+      }
+      const entry = new SwipeHistoryEntry();
+      entry.fromHandle = target.ownerHandle;
+      entry.fromWord = target.word;
+      entry.toHandle = player.handle;
+      entry.timestamp = Date.now();
+      newWord.swipeHistory.push(entry);
+    }
 
     // Add all letters and calculate score
     let score = 0;
@@ -506,7 +523,7 @@ export class GameRoom extends Room<GameState> {
       stealerId: aiId,
       stealerHandle: player.handle,
       newWord: steal.newWord,
-      stolenWords: targetWords.map(t => ({ word: t.word, ownerId: t.ownerId, score: t.score })),
+      stolenWords: targetWords.map(t => ({ word: t.word, ownerId: t.ownerId, ownerHandle: t.ownerHandle, score: t.score })),
       score,
     });
 
@@ -734,16 +751,19 @@ export class GameRoom extends Room<GameState> {
    * Execute a swipe (steal words and create new one)
    */
   private executeSwipe(client: Client, player: Player, wordStr: string, combo: { wordIds: string[]; poolLetters: Letter[] }) {
-    // Gather all target words
-    const targetWords: Array<{ id: string; word: string; letters: Letter[]; ownerId: string; score: number }> = [];
+    // Gather all target words with swipe history
+    const targetWords: Array<{ id: string; word: string; letters: Letter[]; ownerId: string; ownerHandle: string; score: number; swipeHistory: SwipeHistoryEntry[] }> = [];
     for (const wordId of combo.wordIds) {
       const word = this.state.allWords.find(w => w.id === wordId)!;
+      const ownerPlayer = this.state.players.get(word.ownerId);
       targetWords.push({
         id: word.id,
         word: word.word,
         letters: Array.from(word.letters),
         ownerId: word.ownerId,
+        ownerHandle: ownerPlayer?.handle || 'Unknown',
         score: word.score,
+        swipeHistory: Array.from(word.swipeHistory || []),
       });
     }
 
@@ -754,6 +774,22 @@ export class GameRoom extends Room<GameState> {
     newWord.ownerId = client.sessionId;
     newWord.createdAt = Date.now();
     newWord.stolenFrom = targetWords.map(t => t.ownerId).join(',');
+    newWord.stolenFromHandle = targetWords.map(t => t.ownerHandle).join(', ');
+
+    // Build swipe history - inherit from stolen words and add this swipe
+    for (const target of targetWords) {
+      // Inherit existing history from target word
+      for (const historyEntry of target.swipeHistory) {
+        newWord.swipeHistory.push(historyEntry);
+      }
+      // Add this swipe as a new history entry
+      const entry = new SwipeHistoryEntry();
+      entry.fromHandle = target.ownerHandle;
+      entry.fromWord = target.word;
+      entry.toHandle = player.handle;
+      entry.timestamp = Date.now();
+      newWord.swipeHistory.push(entry);
+    }
 
     // Add all letters (from targets + pool)
     let score = 0;
@@ -804,7 +840,7 @@ export class GameRoom extends Room<GameState> {
       stealerId: client.sessionId,
       stealerHandle: player.handle,
       newWord: wordStr,
-      stolenWords: targetWords.map(t => ({ word: t.word, ownerId: t.ownerId, score: t.score })),
+      stolenWords: targetWords.map(t => ({ word: t.word, ownerId: t.ownerId, ownerHandle: t.ownerHandle, score: t.score })),
       score: score,
     });
 

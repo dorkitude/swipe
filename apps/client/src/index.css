@@ -12,7 +12,9 @@
   --text-secondary: #888888;
   --text-muted: #666666;
   --accent-primary: #4ecdc4;
-  --accent-secondary: #ffd93d;
+  --accent-secondary: #c9a82c;
+  --accent-swipe: #5cb85c;
+  --accent-warning: #e6a832;
   --accent-danger: #ff6b6b;
   --accent-google: #4285f4;
 }
