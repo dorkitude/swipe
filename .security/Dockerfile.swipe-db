@@ -1,0 +1,8 @@
+FROM postgres:16-alpine
+USER root
+RUN set -eu; \
+    if command -v apk >/dev/null; then apk add --no-cache --upgrade ca-certificates; \
+    elif command -v apt-get >/dev/null; then apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*; \
+    else exit 1; fi; \
+    if test -f /etc/ca-certificates.conf; then sed -i -e 's|^mozilla/emSign_ECC_Root_CA_-_G3.crt|!&|' -e 's|^mozilla/Comodo_AAA_Services_root.crt|!&|' /etc/ca-certificates.conf; fi; \
+    update-ca-certificates

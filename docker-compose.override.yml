@@ -1,0 +1,7 @@
+services:
+  swipe-db:
+    image: cockpit-security/swipe-db:20261021
+    pull_policy: never
+    build:
+      context: .security
+      dockerfile: Dockerfile.swipe-db
